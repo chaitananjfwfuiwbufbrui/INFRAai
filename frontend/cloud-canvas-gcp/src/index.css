@@ -1,0 +1,239 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+
+@layer base {
+  :root,
+  .light {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 217 91% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 174 72% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 217 91% 50%;
+
+    --radius: 0.75rem;
+
+    /* Custom design tokens */
+    --canvas-bg: 220 14% 96%;
+    --canvas-grid: 220 13% 87%;
+    --node-compute: 217 91% 50%;
+    --node-networking: 262 83% 58%;
+    --node-storage: 25 95% 53%;
+    --node-database: 142 71% 45%;
+    --node-messaging: 340 82% 52%;
+    --node-security: 47 96% 53%;
+    --node-shadow: 0 4px 16px -2px hsl(220 13% 50% / 0.15);
+    --connection-glow: 0 0 12px hsl(var(--primary) / 0.4);
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-primary: 217 91% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 96%;
+    --sidebar-accent-foreground: 222 47% 11%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217 91% 50%;
+  }
+
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 8%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 6%;
+
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 174 72% 50%;
+    --accent-foreground: 222 47% 6%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 217 33% 20%;
+    --input: 217 33% 20%;
+    --ring: 217 91% 60%;
+
+    /* Custom design tokens - dark */
+    --canvas-bg: 222 47% 8%;
+    --canvas-grid: 217 33% 15%;
+    --node-shadow: 0 4px 16px -2px hsl(222 47% 4% / 0.5);
+    --connection-glow: 0 0 12px hsl(var(--primary) / 0.5);
+
+    --sidebar-background: 222 47% 8%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 222 47% 6%;
+    --sidebar-accent: 217 33% 17%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 20%;
+    --sidebar-ring: 217 91% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer components {
+  .canvas-grid {
+    background-size: 20px 20px;
+    background-image: 
+      linear-gradient(to right, hsl(var(--canvas-grid)) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--canvas-grid)) 1px, transparent 1px);
+  }
+
+  .node-card {
+    @apply bg-card border border-border rounded-xl p-3 min-w-[180px];
+    box-shadow: var(--node-shadow);
+    transition: all 0.2s ease;
+  }
+
+  .node-card:hover {
+    @apply border-primary/50;
+    box-shadow: var(--node-shadow), var(--connection-glow);
+  }
+
+  .node-card.selected {
+    @apply border-primary;
+    box-shadow: var(--node-shadow), var(--connection-glow);
+  }
+
+  .node-handle {
+    @apply w-3 h-3 rounded-full border-2 border-primary bg-background;
+    transition: all 0.15s ease;
+  }
+
+  .node-handle:hover {
+    @apply scale-125 bg-primary;
+  }
+
+  .panel-section {
+    @apply p-4 border-b border-border;
+  }
+
+  .panel-title {
+    @apply text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3;
+  }
+
+  .draggable-node {
+    @apply flex items-center gap-3 p-3 rounded-lg bg-secondary/50 border border-transparent cursor-grab;
+    @apply hover:bg-secondary hover:border-border transition-all duration-200;
+  }
+
+  .draggable-node:active {
+    @apply cursor-grabbing scale-[0.98];
+  }
+
+  .toolbar-button {
+    @apply flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium;
+    @apply bg-secondary/50 hover:bg-secondary text-foreground;
+    @apply border border-transparent hover:border-border transition-all duration-200;
+  }
+
+  .toolbar-button.primary {
+    @apply bg-primary text-primary-foreground hover:bg-primary/90;
+  }
+}
+
+/* React Flow custom styles */
+.react-flow__background {
+  background-color: hsl(var(--canvas-bg)) !important;
+}
+
+.react-flow__background pattern circle {
+  fill: hsl(var(--canvas-grid)) !important;
+}
+
+.react-flow__edge-path {
+  stroke: hsl(var(--primary)) !important;
+  stroke-width: 2 !important;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: hsl(var(--accent)) !important;
+}
+
+.react-flow__handle {
+  width: 12px !important;
+  height: 12px !important;
+  background: hsl(var(--background)) !important;
+  border: 2px solid hsl(var(--primary)) !important;
+}
+
+.react-flow__handle:hover {
+  background: hsl(var(--primary)) !important;
+  transform: scale(1.2);
+}
+
+.react-flow__controls {
+  background: hsl(var(--card)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: var(--radius) !important;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: transparent !important;
+  border: none !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: hsl(var(--secondary)) !important;
+}
+
+.react-flow__minimap {
+  background: hsl(var(--card)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: var(--radius) !important;
+}
+
+.react-flow__attribution {
+  display: none !important;
+}
