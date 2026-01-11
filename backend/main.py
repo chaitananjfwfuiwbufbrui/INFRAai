@@ -1,13 +1,16 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
 import sqlite3
 import json
-import requests
-from typing import Optional
-
+import os
+from fastapi import HTTPException
 from services.canvas_compiler import compile_to_canvas
-from fastapi.middleware.cors import CORSMiddleware
 from services.graph_generator import InfraGraphGenerator
+
+# ---------------- APP ----------------
 app = FastAPI(title="Cloud Node Registry API")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,20 +19,19 @@ app.add_middleware(
 )
 
 DB_NAME = "nodes.db"
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 generator = InfraGraphGenerator()
 
+# ---------------- DB ----------------
 def get_db():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-@app.get("/nodes")
-def get_nodes(
-    cloud: Optional[str] = Query(None, description="gcp | aws | azure"),
-    category: Optional[str] = Query(None, description="compute | networking | storage | database | messaging | security"),
-    label: Optional[str] = Query(None, description="Search by label")
-):
+def fetch_nodes_from_db(cloud=None, category=None, label=None):
     conn = get_db()
     cur = conn.cursor()
 
@@ -59,7 +61,7 @@ def get_nodes(
             "label": row["label"],
             "category": row["category"],
             "cloud": row["cloud"],
-            "icon": row["icon"],  # 👈 IMPORTANT
+            "icon": row["icon"],
             "description": row["description"],
             "connections": json.loads(row["connections"]) if row["connections"] else {
                 "canConnectTo": [],
@@ -68,10 +70,71 @@ def get_nodes(
         })
 
     return nodes
+
+
+# ---------------- NODES API ----------------
+@app.get("/nodes")
+def get_nodes(
+    cloud: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    label: Optional[str] = Query(None),
+):
+    return fetch_nodes_from_db(cloud, category, label)
+
+
+
 @app.post("/generate-graph")
-def generate_graph(prompt: str):
-    nodes = requests.get("http://localhost:8000/nodes").json()
-    logical_graph = generator.generate(prompt, nodes)
-    canvas_graph = compile_to_canvas(logical_graph["graph"])
-    return {
-        "summary": logical_graph["summary"],"graph": canvas_graph}
+async def generate_graph(
+    prompt: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None),
+):
+    try:
+        # Always fetch all nodes
+        nodes = fetch_nodes_from_db()
+
+        # ---------- IMAGE FLOW ----------
+        if image:
+            image_path = os.path.join(UPLOAD_DIR, image.filename)
+
+            with open(image_path, "wb") as f:
+                f.write(await image.read())
+
+            logical_graph = generator.generate(
+                user_prompt=prompt or "",
+                available_nodes=nodes,
+                input_type="image",
+                image_path=image_path
+            )
+
+        # ---------- TEXT FLOW ----------
+        else:
+            if not prompt:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Either prompt or image must be provided"
+                )
+
+            logical_graph = generator.generate(
+                user_prompt=prompt,
+                available_nodes=nodes,
+                input_type="text"
+            )
+
+        # ---------- COMPILE TO CANVAS ----------
+        canvas_graph = compile_to_canvas(logical_graph["graph"])
+
+        return {
+            "summary": logical_graph["summary"],
+            "graph": canvas_graph
+        }
+
+    except HTTPException:
+        # Let FastAPI handle expected client errors
+        raise
+
+    except Exception as e:
+        # Catch unexpected server-side failures
+        raise HTTPException(
+            status_code=500,
+            detail=f"Graph generation failed: {str(e)}"
+        )

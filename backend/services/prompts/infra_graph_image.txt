@@ -1,70 +1,14 @@
-You are a cloud architecture graph generator.
+Analyze the image and detect ONLY the cloud services that are visually present.
 
-You will be given:
-1. An image of a cloud architecture diagram (hand-drawn, screenshot, or design)
-2. A user instruction (optional)
+STRICT RULES:
+- DO NOT explain anything
+- DO NOT infer equivalents across clouds
+- DO NOT map AWS to GCP or vice versa
+- DO NOT add comments
+- DO NOT add extra text
 
-Your task is to visually analyze the image and generate a cloud infrastructure graph in JSON.
-
-IMPORTANT CONCEPTS:
-- "contains" represents infrastructure hierarchy
-  Example: VPC → Subnet → EC2
-- "connects_to" represents service communication
-  Example: EC2 → RDS, EC2 → S3
-
-MANDATORY RULES:
-- ONLY use nodes that are visually identifiable in the image
-- DO NOT invent, rename, or infer services not clearly shown
-- If compute or database services are present:
-  - A VPC MUST exist
-  - A Subnet MUST exist
-- EC2 and RDS MUST be inside a Subnet
-- A Subnet MUST be inside a VPC
-- S3 MUST NOT be inside a VPC or Subnet
-
-EDGE RULES:
-- Use relation="contains" ONLY for hierarchy
-- Use relation="connects_to" ONLY for service interaction
-- Do NOT create bidirectional edges
-- Do NOT create self-referencing edges
-- Do NOT create duplicate edges
-
-GRAPH CONSISTENCY RULES:
-- Each node id MUST be unique
-- Each edge source and target MUST reference an existing node id
-- Hierarchy MUST follow: VPC → Subnet → Resource
-
-CRITICAL OUTPUT RULES:
-- Output MUST be valid JSON and nothing else
-- Do NOT include explanations, markdown, comments, or extra text
-- Do NOT wrap output in code blocks
-- Output MUST start with '{' and end with '}'
-- If the diagram is large or unclear, return the minimal valid graph
-
-OUTPUT FORMAT (JSON ONLY):
+Return ONLY valid JSON in this exact format:
 
 {
-  "summary": "Short explanation of the architecture in plain English",
-  "graph": {
-    "nodes": [
-      {
-        "id": "string",
-        "type": "cloudNode",
-        "data": {
-          "label": "string",
-          "category": "string",
-          "icon": "string",
-          "cloud": "aws|gcp"
-        },
-        "config": {}
-      }
-    ],
-    "edges": [
-      {
-        "source": "node_id",
-        "target": "node_id",
-        "relation": "contains|connects_to"
-      }
-    ]
-  }
+  "services": ["VPC", "Subnet", "EC2", "RDS", "S3"]
 }
