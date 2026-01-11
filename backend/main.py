@@ -7,7 +7,8 @@ import os
 from fastapi import HTTPException
 from services.canvas_compiler import compile_to_canvas
 from services.graph_generator import InfraGraphGenerator
-
+from fastapi import Depends
+from auth.clerk import get_current_user
 # ---------------- APP ----------------
 app = FastAPI(title="Cloud Node Registry API")
 
@@ -82,20 +83,20 @@ def get_nodes(
     return fetch_nodes_from_db(cloud, category, label)
 
 
-
 @app.post("/generate-graph")
 async def generate_graph(
     prompt: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
+    user_id: str = Depends(get_current_user),  # 👈 Clerk auth
 ):
     try:
-        # Always fetch all nodes
         nodes = fetch_nodes_from_db()
+
+        image_path = None
 
         # ---------- IMAGE FLOW ----------
         if image:
             image_path = os.path.join(UPLOAD_DIR, image.filename)
-
             with open(image_path, "wb") as f:
                 f.write(await image.read())
 
@@ -109,10 +110,7 @@ async def generate_graph(
         # ---------- TEXT FLOW ----------
         else:
             if not prompt:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Either prompt or image must be provided"
-                )
+                raise HTTPException(status_code=400, detail="Either prompt or image must be provided")
 
             logical_graph = generator.generate(
                 user_prompt=prompt,
@@ -120,8 +118,26 @@ async def generate_graph(
                 input_type="text"
             )
 
-        # ---------- COMPILE TO CANVAS ----------
         canvas_graph = compile_to_canvas(logical_graph["graph"])
+
+        # ---------- STORE USER REQUEST ----------
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO user_requests (
+                user_id, prompt, image_path, summary, graph_json
+            ) VALUES (?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            prompt,
+            image_path,
+            logical_graph["summary"],
+            json.dumps(canvas_graph)
+        ))
+
+        conn.commit()
+        conn.close()
 
         return {
             "summary": logical_graph["summary"],
@@ -129,12 +145,6 @@ async def generate_graph(
         }
 
     except HTTPException:
-        # Let FastAPI handle expected client errors
         raise
-
     except Exception as e:
-        # Catch unexpected server-side failures
-        raise HTTPException(
-            status_code=500,
-            detail=f"Graph generation failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Graph generation failed: {str(e)}")
