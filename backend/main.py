@@ -9,6 +9,10 @@ from services.canvas_compiler import compile_to_canvas
 from services.graph_generator import InfraGraphGenerator
 from fastapi import Depends
 from auth.clerk import get_current_user
+from pydantic import BaseModel
+from services.terraform_generator import TerraformGenerator
+
+from services.terraform_executor import *
 # ---------------- APP ----------------
 app = FastAPI(title="Cloud Node Registry API")
 
@@ -19,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_NAME = "nodes.db"
+DB_NAME = "data/nodes.db"
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -148,3 +152,81 @@ async def generate_graph(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Graph generation failed: {str(e)}")
+    
+
+class TerraformGenerateRequest(BaseModel):
+    infra_spec: dict
+@app.post("/generate_terraform")
+def generate_terraform(req: TerraformGenerateRequest):
+    tg = TerraformGenerator()
+    result = tg.generate_and_store(req.infra_spec)
+
+    return {
+        "run_id": result["run_id"],
+        "files": result["files"]
+    }
+
+
+
+@app.get("/{run_id}")
+def load_terraform_files(run_id: str):
+    run_path = os.path.join("runs", run_id)
+
+    if not os.path.exists(run_path):
+        return {"error": "Run not found"}
+
+    files = {}
+    for filename in os.listdir(run_path):
+        if filename.endswith(".tf"):
+            with open(os.path.join(run_path, filename), "r") as f:
+                files[filename] = f.read()
+
+    return {
+        "run_id": run_id,
+        "files": files
+    }
+
+
+class TerraformExecuteRequest(BaseModel):
+    run_id: str
+    action: str
+    project_id: str
+    sa_key_json: str
+    auto_approve: bool = False
+@app.post("/execute")
+def execute_terraform(req: TerraformExecuteRequest):
+    run_path = os.path.join("runs", req.run_id)
+
+    if not os.path.exists(run_path):
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    executor = TerraformExecutor(
+        run_path=run_path,
+        project_id=req.project_id,
+        sa_key_json=req.sa_key_json
+    )
+
+    result = executor.run(
+        action=req.action,
+        auto_approve=req.auto_approve
+    )
+
+    return {
+        "status": "success",
+        "platform": "gcp",
+        "run_id": req.run_id,
+        "action": req.action,
+        "summary": {
+            "duration_seconds": result["duration_seconds"]
+        },
+        "outputs": result["outputs"],
+        "destroy": {
+            "endpoint": "/execute",
+            "method": "POST",
+            "payload": {
+                "run_id": req.run_id,
+                "action": "destroy",
+                "auto_approve": True
+            }
+        }
+    }

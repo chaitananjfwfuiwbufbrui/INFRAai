@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/hooks/useTheme";
 import Landing from "./pages/Landing";
 import Index from "./pages/Index";
 import Deployment from "./pages/Deployment";
+import Infrastructure from "./pages/Infrastructure";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -21,7 +22,8 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/canvas" element={<Index />} />
-            <Route path="/deploy" element={<Deployment />} />
+            <Route path="/deployment" element={<Deployment />} />
+            <Route path="/infrastructure" element={<Infrastructure />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

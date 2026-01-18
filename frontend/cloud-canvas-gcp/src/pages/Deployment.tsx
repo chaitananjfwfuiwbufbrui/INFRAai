@@ -1,469 +1,381 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Cloud, Key, CheckCircle2, Loader2, Copy, Sun, Moon, Terminal, Code2, Eye } from 'lucide-react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { 
+  Server, 
+  Network, 
+  Shield, 
+  Database, 
+  Scale,
+  CheckCircle2,
+  Edit,
+  Trash2,
+  Loader2
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { useArchitectureStore } from '@/store/architectureStore';
-import { useTheme } from '@/hooks/useTheme';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import NavHeader from '@/components/shared/NavHeader';
 import { cn } from '@/lib/utils';
+import { apiEndpoints, apiRequest } from '@/lib/api';
+import { toast } from 'sonner';
 
-const Deployment = () => {
+interface LocationState {
+  platform?: string;
+  saKeyJson?: string;
+}
+
+// Status card data
+const statusCards = [
+  {
+    icon: Server,
+    title: 'Compute',
+    status: 'Healthy',
+    statusType: 'success' as const,
+    details: '2 VMs · Running',
+  },
+  {
+    icon: Network,
+    title: 'Network',
+    status: 'Secured',
+    statusType: 'success' as const,
+    details: 'Private VNet',
+  },
+  {
+    icon: Shield,
+    title: 'Security',
+    status: 'Protected',
+    statusType: 'success' as const,
+    details: 'HTTPS only · No public SSH',
+  },
+  {
+    icon: Database,
+    title: 'Storage',
+    status: 'Available',
+    statusType: 'success' as const,
+    details: 'Encrypted',
+  },
+  {
+    icon: Scale,
+    title: 'Load Balancer',
+    status: 'Active',
+    statusType: 'success' as const,
+    details: 'Global HTTP(S)',
+  },
+];
+
+// Architecture nodes for read-only canvas
+const architectureNodes = [
+  { id: 'vm1', label: 'VM-1', status: 'running' as const, x: 100, y: 100 },
+  { id: 'vm2', label: 'VM-2', status: 'running' as const, x: 100, y: 200 },
+  { id: 'lb', label: 'Load Balancer', status: 'running' as const, x: 300, y: 150 },
+  { id: 'storage', label: 'Storage', status: 'running' as const, x: 500, y: 150 },
+  { id: 'network', label: 'VPC Network', status: 'running' as const, x: 300, y: 50 },
+];
+
+const getStatusColor = (statusType: 'success' | 'warning' | 'error') => {
+  switch (statusType) {
+    case 'success': return 'text-green-500 bg-green-500/10 border-green-500/30';
+    case 'warning': return 'text-yellow-500 bg-yellow-500/10 border-yellow-500/30';
+    case 'error': return 'text-red-500 bg-red-500/10 border-red-500/30';
+  }
+};
+
+const getStatusDot = (status: 'running' | 'warning' | 'error') => {
+  switch (status) {
+    case 'running': return '🟢';
+    case 'warning': return '🟡';
+    case 'error': return '🔴';
+  }
+};
+
+export default function Deployment() {
   const navigate = useNavigate();
-  const { nodes } = useArchitectureStore();
-  const { theme, toggleTheme } = useTheme();
-  const [projectId, setProjectId] = useState('');
-  const [serviceAccountKey, setServiceAccountKey] = useState('');
-  const [isDeploying, setIsDeploying] = useState(false);
-  const [viewMode, setViewMode] = useState<'nocode' | 'code'>('nocode');
-  const [deployedServices, setDeployedServices] = useState<string[]>([]);
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  
+  // Get runId and projectId from URL params
+  const runId = searchParams.get('runId');
+  const projectId = searchParams.get('projectId');
+  
+  // Get additional data from location state
+  const state = location.state as LocationState | null;
+  
+  const [isDestroyDialogOpen, setIsDestroyDialogOpen] = useState(false);
+  const [isDestroying, setIsDestroying] = useState(false);
 
-  const handleDeploy = () => {
-    if (!projectId || !serviceAccountKey) return;
-    
-    setIsDeploying(true);
-    // Simulate deployment
-    const services = nodes.map(n => n.data.label);
-    let index = 0;
-    
-    const interval = setInterval(() => {
-      if (index < services.length) {
-        setDeployedServices(prev => [...prev, services[index]]);
-        index++;
-      } else {
-        clearInterval(interval);
-        setIsDeploying(false);
-      }
-    }, 800);
+  const handleModify = () => {
+    navigate('/canvas');
   };
 
-  const generateTerraformCode = () => {
-    let code = `# Generated Terraform Configuration
-# Project: ${projectId || 'your-project-id'}
-
-terraform {
-  required_providers {
-    google = {
-      source  = "hashicorp/google"
-      version = "~> 4.0"
+  const handleDestroy = async () => {
+    if (!runId || !projectId) {
+      toast.error('Missing run ID or project ID');
+      return;
     }
-  }
-}
 
-provider "google" {
-  project = "${projectId || 'your-project-id'}"
-  region  = "us-central1"
-}
+    setIsDestroying(true);
 
-`;
+    try {
+      await apiRequest<{ status: string }>(
+        apiEndpoints.execute,
+        {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            run_id: runId,
+            action: 'destroy',
+            project_id: projectId,
+            sa_key_json: state?.saKeyJson || '',
+            auto_approve: true,
+          }),
+        }
+      );
 
-    nodes.forEach(node => {
-      const resourceName = node.data.label.toLowerCase().replace(/\s+/g, '_');
-      
-      switch (node.data.type) {
-        case 'compute_engine':
-          code += `# Compute Engine Instance
-resource "google_compute_instance" "${resourceName}" {
-  name         = "${resourceName}"
-  machine_type = "e2-medium"
-  zone         = "us-central1-a"
-
-  boot_disk {
-    initialize_params {
-      image = "debian-cloud/debian-11"
+      toast.success('Infrastructure destroyed successfully!');
+      setIsDestroyDialogOpen(false);
+      navigate('/infrastructure');
+    } catch (error) {
+      console.error('Failed to destroy infrastructure:', error);
+      toast.error('Failed to destroy infrastructure', {
+        description: 'Please try again or check your configuration'
+      });
+    } finally {
+      setIsDestroying(false);
     }
-  }
-
-  network_interface {
-    network = "default"
-    access_config {}
-  }
-}
-
-`;
-          break;
-        case 'cloud_run':
-          code += `# Cloud Run Service
-resource "google_cloud_run_service" "${resourceName}" {
-  name     = "${resourceName}"
-  location = "us-central1"
-
-  template {
-    spec {
-      containers {
-        image = "gcr.io/cloudrun/hello"
-      }
-    }
-  }
-}
-
-`;
-          break;
-        case 'cloud_storage':
-          code += `# Cloud Storage Bucket
-resource "google_storage_bucket" "${resourceName}" {
-  name          = "${resourceName}-\${random_id.bucket_suffix.hex}"
-  location      = "US"
-  force_destroy = true
-
-  uniform_bucket_level_access = true
-}
-
-`;
-          break;
-        case 'cloud_sql':
-          code += `# Cloud SQL Instance
-resource "google_sql_database_instance" "${resourceName}" {
-  name             = "${resourceName}"
-  database_version = "POSTGRES_14"
-  region           = "us-central1"
-
-  settings {
-    tier = "db-f1-micro"
-  }
-
-  deletion_protection = false
-}
-
-`;
-          break;
-        case 'vpc':
-          code += `# VPC Network
-resource "google_compute_network" "${resourceName}" {
-  name                    = "${resourceName}"
-  auto_create_subnetworks = false
-}
-
-`;
-          break;
-        case 'load_balancer':
-          code += `# HTTP Load Balancer
-resource "google_compute_global_forwarding_rule" "${resourceName}" {
-  name       = "${resourceName}"
-  target     = google_compute_target_http_proxy.${resourceName}_proxy.id
-  port_range = "80"
-}
-
-resource "google_compute_target_http_proxy" "${resourceName}_proxy" {
-  name    = "${resourceName}-proxy"
-  url_map = google_compute_url_map.${resourceName}_urlmap.id
-}
-
-resource "google_compute_url_map" "${resourceName}_urlmap" {
-  name            = "${resourceName}-urlmap"
-  default_service = google_compute_backend_service.${resourceName}_backend.id
-}
-
-`;
-          break;
-        case 'pubsub':
-          code += `# Pub/Sub Topic
-resource "google_pubsub_topic" "${resourceName}" {
-  name = "${resourceName}"
-}
-
-resource "google_pubsub_subscription" "${resourceName}_sub" {
-  name  = "${resourceName}-subscription"
-  topic = google_pubsub_topic.${resourceName}.name
-}
-
-`;
-          break;
-        case 'firestore':
-          code += `# Firestore Database
-resource "google_firestore_database" "${resourceName}" {
-  project     = "${projectId || 'your-project-id'}"
-  name        = "(default)"
-  location_id = "us-central"
-  type        = "FIRESTORE_NATIVE"
-}
-
-`;
-          break;
-        default:
-          code += `# ${node.data.label}
-# Resource configuration for ${node.data.type}
-# Add your configuration here
-
-`;
-      }
-    });
-
-    return code;
-  };
-
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(generateTerraformCode());
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="h-14 bg-sidebar border-b border-sidebar-border flex items-center justify-between px-4">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate('/canvas')}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-              <Cloud className="w-5 h-5 text-primary-foreground" />
-            </div>
-            <div>
-              <h1 className="font-bold text-foreground leading-none">Deploy Architecture</h1>
-              <span className="text-xs text-muted-foreground">GCP Deployment</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-4">
-          {/* View Toggle */}
-          <div className="flex items-center bg-secondary rounded-lg p-1">
-            <button
-              onClick={() => setViewMode('nocode')}
-              className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all',
-                viewMode === 'nocode'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Eye className="w-4 h-4" />
-              No Code
-            </button>
-            <button
-              onClick={() => setViewMode('code')}
-              className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all',
-                viewMode === 'code'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Code2 className="w-4 h-4" />
-              Code
-            </button>
-          </div>
-
-          {/* Theme Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
-          </Button>
-        </div>
-      </header>
+    <div className="min-h-screen bg-background text-foreground">
+      <NavHeader showBackButton backPath="/infrastructure" />
 
       {/* Main Content */}
-      <div className="flex-1 flex">
-        {viewMode === 'nocode' ? (
-          <>
-            {/* Credentials Panel */}
-            <div className="w-96 border-r border-border bg-sidebar p-6 overflow-y-auto">
-              <h2 className="text-lg font-semibold text-foreground mb-6 flex items-center gap-2">
-                <Key className="w-5 h-5 text-primary" />
-                Cloud Credentials
-              </h2>
-
-              <div className="space-y-4">
-                <div>
-                  <Label htmlFor="projectId" className="text-foreground">GCP Project ID</Label>
-                  <Input
-                    id="projectId"
-                    value={projectId}
-                    onChange={(e) => setProjectId(e.target.value)}
-                    placeholder="my-gcp-project"
-                    className="mt-1.5"
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="serviceKey" className="text-foreground">Service Account Key (JSON)</Label>
-                  <textarea
-                    id="serviceKey"
-                    value={serviceAccountKey}
-                    onChange={(e) => setServiceAccountKey(e.target.value)}
-                    placeholder='{"type": "service_account", ...}'
-                    className="mt-1.5 w-full h-32 px-3 py-2 bg-background border border-input rounded-lg text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                </div>
-
-                <Button
-                  onClick={handleDeploy}
-                  disabled={!projectId || !serviceAccountKey || isDeploying}
-                  className="w-full"
-                >
-                  {isDeploying ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Deploying...
-                    </>
-                  ) : (
-                    <>
-                      <Cloud className="w-4 h-4 mr-2" />
-                      Deploy to GCP
-                    </>
-                  )}
-                </Button>
-              </div>
-
-              <div className="mt-8">
-                <h3 className="text-sm font-medium text-foreground mb-3">Services to Deploy</h3>
-                <div className="space-y-2">
-                  {nodes.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No services in architecture</p>
-                  ) : (
-                    nodes.map(node => (
-                      <div
-                        key={node.id}
-                        className="flex items-center gap-2 p-2 bg-secondary/50 rounded-lg text-sm"
-                      >
-                        <div className={cn(
-                          'w-2 h-2 rounded-full',
-                          deployedServices.includes(node.data.label)
-                            ? 'bg-green-500'
-                            : 'bg-muted-foreground'
-                        )} />
-                        <span className="text-foreground">{node.data.label}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Logs Panel */}
-            <div className="flex-1 bg-background p-6 overflow-y-auto">
-              <h2 className="text-lg font-semibold text-foreground mb-6 flex items-center gap-2">
-                <Terminal className="w-5 h-5 text-primary" />
-                Deployment Logs
-              </h2>
-
-              <div className="bg-[#1e1e1e] rounded-lg p-4 font-mono text-sm min-h-[400px]">
-                {deployedServices.length === 0 ? (
-                  <p className="text-[#6a9955]"># Waiting to start deployment...</p>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-[#569cd6]">$ terraform init</p>
-                    <p className="text-[#dcdcdc]">Initializing the backend...</p>
-                    <p className="text-[#dcdcdc]">Initializing provider plugins...</p>
-                    <p className="text-[#6a9955]">Terraform has been successfully initialized!</p>
-                    <br />
-                    <p className="text-[#569cd6]">$ terraform apply -auto-approve</p>
-                    <br />
-                    {deployedServices.map((service, index) => (
-                      <div key={service} className="space-y-1">
-                        <p className="text-[#dcdcdc]">
-                          <span className="text-[#4ec9b0]">google_resource.{service.toLowerCase().replace(/\s+/g, '_')}</span>: Creating...
-                        </p>
-                        <p className="text-[#6a9955]">
-                          <CheckCircle2 className="w-4 h-4 inline mr-1" />
-                          google_resource.{service.toLowerCase().replace(/\s+/g, '_')}: Creation complete
-                        </p>
-                      </div>
-                    ))}
-                    {!isDeploying && deployedServices.length === nodes.length && nodes.length > 0 && (
-                      <>
-                        <br />
-                        <p className="text-[#6a9955]">Apply complete! Resources: {nodes.length} added, 0 changed, 0 destroyed.</p>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
-        ) : (
-          /* Code View - VS Code Style */
-          <div className="flex-1 flex flex-col">
-            {/* File Tabs */}
-            <div className="h-10 bg-[#252526] border-b border-[#1e1e1e] flex items-center px-2">
-              <div className="flex items-center gap-1 px-3 py-1.5 bg-[#1e1e1e] text-[#cccccc] text-sm rounded-t">
-                <Code2 className="w-4 h-4 text-[#519aba]" />
-                main.tf
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={copyToClipboard}
-                className="ml-auto h-7 w-7 text-[#cccccc] hover:text-white hover:bg-[#3c3c3c]"
-                title="Copy to clipboard"
-              >
-                <Copy className="w-4 h-4" />
-              </Button>
-            </div>
-
-            {/* Code Editor */}
-            <div className="flex-1 bg-[#1e1e1e] overflow-auto">
-              <div className="flex min-h-full">
-                {/* Line Numbers */}
-                <div className="py-4 px-3 text-right text-[#858585] text-sm font-mono select-none border-r border-[#3c3c3c] bg-[#1e1e1e]">
-                  {generateTerraformCode().split('\n').map((_, i) => (
-                    <div key={i} className="leading-6">{i + 1}</div>
-                  ))}
-                </div>
-
-                {/* Code Content */}
-                <pre className="flex-1 p-4 text-sm font-mono overflow-x-auto">
-                  <code>
-                    {generateTerraformCode().split('\n').map((line, i) => (
-                      <div key={i} className="leading-6">
-                        {line.startsWith('#') ? (
-                          <span className="text-[#6a9955]">{line}</span>
-                        ) : line.includes('resource') ? (
-                          <>
-                            <span className="text-[#569cd6]">resource</span>
-                            <span className="text-[#dcdcdc]">{line.replace('resource', '')}</span>
-                          </>
-                        ) : line.includes('provider') ? (
-                          <>
-                            <span className="text-[#569cd6]">provider</span>
-                            <span className="text-[#dcdcdc]">{line.replace('provider', '')}</span>
-                          </>
-                        ) : line.includes('terraform') ? (
-                          <>
-                            <span className="text-[#569cd6]">terraform</span>
-                            <span className="text-[#dcdcdc]">{line.replace('terraform', '')}</span>
-                          </>
-                        ) : line.includes('=') ? (
-                          <>
-                            <span className="text-[#9cdcfe]">{line.split('=')[0]}</span>
-                            <span className="text-[#dcdcdc]">=</span>
-                            <span className="text-[#ce9178]">{line.split('=').slice(1).join('=')}</span>
-                          </>
-                        ) : (
-                          <span className="text-[#dcdcdc]">{line}</span>
-                        )}
-                      </div>
-                    ))}
-                  </code>
-                </pre>
-              </div>
-            </div>
-
-            {/* Status Bar */}
-            <div className="h-6 bg-[#007acc] flex items-center justify-between px-3 text-[11px] text-white">
-              <div className="flex items-center gap-4">
-                <span>Terraform</span>
-                <span>UTF-8</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <span>Ln {generateTerraformCode().split('\n').length}, Col 1</span>
-                <span>Spaces: 2</span>
-              </div>
-            </div>
+      <main className="container mx-auto px-4 py-8 space-y-8 max-w-6xl">
+        {/* Success Header */}
+        <div className="text-center py-8">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-500/10 mb-6">
+            <CheckCircle2 className="w-10 h-10 text-green-500" />
           </div>
-        )}
-      </div>
+          <h1 className="text-3xl font-bold mb-3">Infrastructure Deployed Successfully</h1>
+          <p className="text-muted-foreground text-lg">
+            7 resources were created successfully and are currently running.
+          </p>
+          
+          {/* Show deployment info */}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+            {state?.platform && (
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium">
+                Platform: {state.platform}
+              </div>
+            )}
+            {runId && (
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-muted text-muted-foreground text-sm font-mono">
+                Run: {runId}
+              </div>
+            )}
+            {projectId && (
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-muted text-muted-foreground text-sm font-mono">
+                Project: {projectId}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Status Cards */}
+        <section>
+          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+            <span>📊</span> Health Overview
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            {statusCards.map((card, index) => (
+              <Card 
+                key={index}
+                className={cn(
+                  "border-2 transition-all",
+                  getStatusColor(card.statusType)
+                )}
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <card.icon className="h-6 w-6" />
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-current/10">
+                      {card.status}
+                    </span>
+                  </div>
+                  <h3 className="font-semibold text-foreground">{card.title}</h3>
+                  <p className="text-sm text-muted-foreground">{card.details}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+
+        {/* Architecture Snapshot */}
+        <section>
+          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+            <span>🏗️</span> Architecture Snapshot
+          </h2>
+          <Card className="border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground font-normal flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                Read-only view · Live status
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="relative bg-muted/30 rounded-lg border border-border min-h-[300px] overflow-hidden">
+                {/* Simple architecture visualization */}
+                <svg className="w-full h-[300px]" viewBox="0 0 600 300">
+                  {/* Connections */}
+                  <line x1="150" y1="120" x2="300" y2="170" stroke="currentColor" strokeWidth="2" className="text-border" strokeDasharray="5,5" />
+                  <line x1="150" y1="220" x2="300" y2="170" stroke="currentColor" strokeWidth="2" className="text-border" strokeDasharray="5,5" />
+                  <line x1="350" y1="170" x2="480" y2="170" stroke="currentColor" strokeWidth="2" className="text-border" strokeDasharray="5,5" />
+                  <line x1="320" y1="70" x2="320" y2="150" stroke="currentColor" strokeWidth="2" className="text-border" strokeDasharray="5,5" />
+                  
+                  {/* Nodes */}
+                  {architectureNodes.map((node) => (
+                    <g key={node.id} transform={`translate(${node.x}, ${node.y})`}>
+                      <rect 
+                        x="-45" 
+                        y="-25" 
+                        width="90" 
+                        height="50" 
+                        rx="8" 
+                        className="fill-card stroke-border"
+                        strokeWidth="2"
+                      />
+                      <text 
+                        x="0" 
+                        y="-5" 
+                        textAnchor="middle" 
+                        className="fill-foreground text-xs font-medium"
+                      >
+                        {node.label}
+                      </text>
+                      <text 
+                        x="0" 
+                        y="12" 
+                        textAnchor="middle" 
+                        className="text-sm"
+                      >
+                        {getStatusDot(node.status)}
+                      </text>
+                    </g>
+                  ))}
+                </svg>
+
+                {/* Legend */}
+                <div className="absolute bottom-4 left-4 flex items-center gap-4 text-sm text-muted-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <span>🟢</span> Running
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span>🟡</span> Warning
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span>🔴</span> Error
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Action Buttons */}
+        <div className="flex flex-col sm:flex-row gap-4 pt-4">
+          <Button
+            onClick={handleModify}
+            variant="outline"
+            size="lg"
+            className="flex-1 gap-2"
+          >
+            <Edit className="h-5 w-5" />
+            Modify Architecture
+          </Button>
+          <Button
+            onClick={() => setIsDestroyDialogOpen(true)}
+            variant="destructive"
+            size="lg"
+            className="flex-1 gap-2"
+          >
+            <Trash2 className="h-5 w-5" />
+            Destroy Infrastructure
+          </Button>
+        </div>
+      </main>
+
+      {/* Destroy Confirmation Dialog */}
+      <Dialog open={isDestroyDialogOpen} onOpenChange={setIsDestroyDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <Trash2 className="h-5 w-5" />
+              Destroy Infrastructure
+            </DialogTitle>
+            <DialogDescription>
+              This action will permanently destroy all resources in this deployment. 
+              This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4 space-y-3">
+            <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-sm">
+              <p className="font-medium text-destructive mb-2">The following will be destroyed:</p>
+              <ul className="list-disc list-inside text-muted-foreground space-y-1">
+                <li>2 Virtual Machines</li>
+                <li>1 VPC Network</li>
+                <li>1 Load Balancer</li>
+                <li>1 Storage Bucket</li>
+                <li>3 Security Rules</li>
+              </ul>
+            </div>
+            
+            {runId && (
+              <p className="text-xs text-muted-foreground font-mono">
+                Run ID: {runId}
+              </p>
+            )}
+            {projectId && (
+              <p className="text-xs text-muted-foreground font-mono">
+                Project: {projectId}
+              </p>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsDestroyDialogOpen(false)}
+              disabled={isDestroying}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDestroy}
+              disabled={isDestroying}
+            >
+              {isDestroying ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Destroying...
+                </>
+              ) : (
+                'Destroy All Resources'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
-};
-
-export default Deployment;
+}

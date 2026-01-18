@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Node } from '@xyflow/react';
 import TopToolbar from '@/components/toolbar/TopToolbar';
 import LeftPanel from '@/components/panels/LeftPanel';
@@ -7,12 +8,34 @@ import ArchitectureCanvas from '@/components/canvas/ArchitectureCanvas';
 import AIChatPopup from '@/components/chat/AIChatPopup';
 import { GCPNodeData, useArchitectureStore } from '@/store/architectureStore';
 
+interface LocationState {
+  prompt?: string;
+  summary?: string;
+  openChat?: boolean;
+}
+
 const Index = () => {
+  const location = useLocation();
+  const state = location.state as LocationState | null;
+  
   const [selectedNode, setSelectedNode] = useState<Node<GCPNodeData> | null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [showAIChat, setShowAIChat] = useState(false);
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [initialChatMessage, setInitialChatMessage] = useState<{ prompt: string; summary: string } | null>(null);
   const { selectNode, nodes } = useArchitectureStore();
+
+  // Handle navigation state - open chat if coming from landing with prompt
+  useEffect(() => {
+    if (state?.openChat) {
+      setShowAIChat(true);
+      if (state.prompt && state.summary) {
+        setInitialChatMessage({ prompt: state.prompt, summary: state.summary });
+      }
+      // Clear the state to prevent re-triggering
+      window.history.replaceState({}, document.title);
+    }
+  }, [state]);
 
   // Handle Ctrl+L for AI chat
   useEffect(() => {
@@ -54,6 +77,11 @@ const Index = () => {
 
   const handleClosePanel = useCallback(() => {
     setShowConfig(false);
+  }, []);
+
+  const handleChatClose = useCallback(() => {
+    setShowAIChat(false);
+    setInitialChatMessage(null);
   }, []);
 
   return (
@@ -134,7 +162,11 @@ const Index = () => {
       </div>
 
       {/* AI Chat Popup */}
-      <AIChatPopup isOpen={showAIChat} onClose={() => setShowAIChat(false)} />
+      <AIChatPopup 
+        isOpen={showAIChat} 
+        onClose={handleChatClose}
+        initialMessage={initialChatMessage}
+      />
     </div>
   );
 };

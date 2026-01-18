@@ -2,7 +2,9 @@ import os
 import json
 import uuid
 from datetime import datetime
-from llmchat import GroqLLM
+
+from services.llmchat.factory import get_llm
+
 
 
 class TerraformGenerator:
@@ -14,8 +16,8 @@ class TerraformGenerator:
     BASE_DIR = os.path.join(os.getcwd(), "runs")
    # Docker-safe base path
 
-    def __init__(self):
-        self.llm = GroqLLM()
+    def __init__(self, llm_provider="groq"):
+        self.llm = get_llm(llm_provider)
 
     # -------------------------
     # PROMPT

@@ -1,30 +1,108 @@
 import { useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { 
   Save, 
-  Download, 
   CheckCircle, 
   Undo2, 
   Redo2, 
   Trash2,
   FileJson,
-  Cloud,
   Sun,
   Moon,
   ArrowRight,
-  Upload
+  Upload,
+  LayoutGrid,
+  Sparkles,
+  Loader2
 } from 'lucide-react';
 import { useArchitectureStore } from '@/store/architectureStore';
 import { useTheme } from '@/hooks/useTheme';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { apiEndpoints, apiRequest } from '@/lib/api';
+import {
+  SignedIn,
+  SignedOut,
+  SignInButton,
+  UserButton,
+} from '@clerk/clerk-react';
+import {
+  Dialog,
+  DialogContent,
+} from '@/components/ui/dialog';
 
 const TopToolbar = () => {
   const navigate = useNavigate();
   const { nodes, edges, clearCanvas, loadArchitecture } = useArchitectureStore();
   const { theme, toggleTheme } = useTheme();
   const [isValidated, setIsValidated] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Convert canvas nodes to infrastructure spec
+  const convertNodesToInfraSpec = () => {
+    const resources = nodes.map((node) => {
+      const baseResource: Record<string, unknown> = {
+        type: node.data.icon || node.data.category,
+        name: node.data.label.toLowerCase().replace(/\s+/g, '-'),
+      };
+      
+      // Add config values if available
+      if (node.data.config) {
+        Object.entries(node.data.config).forEach(([key, value]) => {
+          baseResource[key] = value;
+        });
+      }
+      
+      return baseResource;
+    });
+
+    return {
+      provider: 'gcp',
+      project_name: 'demo-app',
+      region: 'us-central1',
+      resources,
+    };
+  };
+
+  const handleGenerate = async () => {
+    if (nodes.length === 0) {
+      toast.info('Canvas is empty', {
+        description: 'Add some nodes to generate Terraform'
+      });
+      return;
+    }
+
+    setIsGenerating(true);
+    
+    try {
+      const infraSpec = convertNodesToInfraSpec();
+      
+      const response = await apiRequest<{ run_id: string; files: string[] }>(
+        apiEndpoints.generateTerraform,
+        {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ infra_spec: infraSpec }),
+        }
+      );
+      
+      toast.success('Terraform generated successfully!');
+      
+      // Navigate to infrastructure page with run_id
+      navigate('/infrastructure', { state: { runId: response.run_id } });
+    } catch (error) {
+      console.error('Generate error:', error);
+      toast.error('Failed to generate Terraform', {
+        description: 'Please check your connection and try again'
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const handleSave = () => {
     const architecture = { nodes, edges };
@@ -116,17 +194,11 @@ const TopToolbar = () => {
 
   return (
     <header className="h-14 bg-sidebar border-b border-sidebar-border flex items-center justify-between px-4">
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <Cloud className="w-5 h-5 text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="font-bold text-foreground leading-none">Cloud Architect</h1>
-            <span className="text-xs text-muted-foreground">GCP Edition</span>
-          </div>
-        </div>
-      </div>
+      <Link to="/" className="flex items-center gap-2">
+        <LayoutGrid className="w-6 h-6 text-primary" />
+        <span className="text-foreground font-bold text-xl italic">cloud</span>
+        <span className="text-muted-foreground text-sm">.architect</span>
+      </Link>
 
       <div className="flex items-center gap-2">
         <button className="toolbar-button" title="Undo">
@@ -174,6 +246,27 @@ const TopToolbar = () => {
             <ArrowRight className="w-4 h-4" />
           </Button>
         )}
+
+        {/* Generate Button - only show when canvas has nodes */}
+        {nodes.length > 0 && (
+          <Button
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="hidden sm:inline">Generating...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4" />
+                <span className="hidden sm:inline">Generate</span>
+              </>
+            )}
+          </Button>
+        )}
         
         <div className="w-px h-6 bg-border mx-2" />
         
@@ -194,6 +287,25 @@ const TopToolbar = () => {
         >
           {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
         </Button>
+
+        {/* User Profile */}
+        <SignedOut>
+          <SignInButton mode="modal">
+            <Button variant="outline" size="sm">
+              Sign In
+            </Button>
+          </SignInButton>
+        </SignedOut>
+        <SignedIn>
+          <UserButton 
+            afterSignOutUrl="/"
+            appearance={{
+              elements: {
+                avatarBox: "w-9 h-9"
+              }
+            }}
+          />
+        </SignedIn>
       </div>
     </header>
   );

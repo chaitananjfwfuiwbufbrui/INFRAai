@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { useArchitectureStore } from '@/store/architectureStore';
+import { useAuth } from "@clerk/clerk-react";
 
 interface Message {
   id: string;
@@ -14,9 +15,10 @@ interface Message {
 interface AIChatPopupProps {
   isOpen: boolean;
   onClose: () => void;
+  initialMessage?: { prompt: string; summary: string } | null;
 }
 
-const AIChatPopup = ({ isOpen, onClose }: AIChatPopupProps) => {
+const AIChatPopup = ({ isOpen, onClose, initialMessage }: AIChatPopupProps) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -28,8 +30,28 @@ const AIChatPopup = ({ isOpen, onClose }: AIChatPopupProps) => {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasProcessedInitial, setHasProcessedInitial] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { loadArchitecture } = useArchitectureStore();
+const { getToken } = useAuth();
+  // Handle initial message from landing page
+  useEffect(() => {
+    if (initialMessage && !hasProcessedInitial) {
+      const userMsg: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: initialMessage.prompt
+      };
+      const aiMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: initialMessage.summary
+      };
+      setMessages(prev => [...prev, userMsg, aiMsg]);
+      setHasProcessedInitial(true);
+    }
+  }, [initialMessage, hasProcessedInitial]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -48,18 +70,22 @@ const AIChatPopup = ({ isOpen, onClose }: AIChatPopupProps) => {
     const prompt = input.trim();
     setInput('');
     setIsLoading(true);
+    setIsTyping(true);
 
     try {
-      const response = await fetch(
-        `http://localhost:8000/generate-graph?prompt=${encodeURIComponent(prompt)}`,
-        {
-          method: 'POST',
-          headers: {
-            'accept': 'application/json',
-          },
-        }
-      );
-
+      const formData = new FormData();
+      formData.append('prompt', prompt);
+      const token = await getToken();
+      if (!token) {
+      throw new Error("User not authenticated");
+    }
+      const response = await fetch("http://localhost:8000/generate-graph", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+  body: formData,
+});
       if (!response.ok) {
         throw new Error('Failed to generate architecture');
       }
@@ -88,6 +114,7 @@ const AIChatPopup = ({ isOpen, onClose }: AIChatPopupProps) => {
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
+      setIsTyping(false);
     }
   };
 
@@ -166,9 +193,18 @@ const AIChatPopup = ({ isOpen, onClose }: AIChatPopupProps) => {
                 : 'bg-secondary text-secondary-foreground'
             )}
           >
-            {message.content}
+          {message.content}
           </div>
         ))}
+        {isTyping && (
+          <div className="max-w-[85%] p-3 rounded-lg text-sm bg-secondary text-secondary-foreground">
+            <div className="flex items-center gap-1">
+              <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
