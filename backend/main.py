@@ -11,6 +11,7 @@ from fastapi import Depends
 from auth.clerk import get_current_user
 from pydantic import BaseModel
 from services.terraform_generator import TerraformGenerator
+from fastapi.responses import StreamingResponse
 
 from services.terraform_executor import *
 # ---------------- APP ----------------
@@ -206,27 +207,63 @@ def execute_terraform(req: TerraformExecuteRequest):
         sa_key_json=req.sa_key_json
     )
 
-    result = executor.run(
-        action=req.action,
-        auto_approve=req.auto_approve
+    # Run in background thread
+    import threading
+
+    thread = threading.Thread(
+        target=executor.run,
+        kwargs={
+            "action": req.action,
+            "auto_approve": req.auto_approve
+        },
+        daemon=True
     )
+    thread.start()
 
     return {
-        "status": "success",
+        "status": "started",
         "platform": "gcp",
         "run_id": req.run_id,
         "action": req.action,
-        "summary": {
-            "duration_seconds": result["duration_seconds"]
-        },
-        "outputs": result["outputs"],
-        "destroy": {
-            "endpoint": "/execute",
-            "method": "POST",
-            "payload": {
-                "run_id": req.run_id,
-                "action": "destroy",
-                "auto_approve": True
-            }
+        "monitor": {
+            "status_endpoint": f"/runs/{req.run_id}/status",
+            "logs_endpoint": f"/runs/{req.run_id}/logs"
         }
     }
+
+@app.get("/runs/{run_id}/terminal")
+def stream_terminal(run_id: str):
+    log_path = os.path.join("runs", run_id, "executor.log")
+    status_path = os.path.join("runs", run_id, "status.json")
+
+    def event_stream():
+        last_pos = 0
+        while True:
+            if os.path.exists(log_path):
+                with open(log_path, "r") as f:
+                    f.seek(last_pos)
+                    data = f.read()
+                    last_pos = f.tell()
+                    if data:
+                        yield f"data: {data}\n\n"
+
+            if os.path.exists(status_path):
+                with open(status_path, "r") as f:
+                    status = json.load(f)
+                    if status["status"] in ("completed", "failed"):
+                        yield "event: end\ndata: done\n\n"
+                        break
+
+            time.sleep(1)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+@app.get("/runs/{run_id}/status")
+def get_run_status(run_id: str):
+    status_path = os.path.join("runs", run_id, "status.json")
+
+    if not os.path.exists(status_path):
+        raise HTTPException(status_code=404, detail="Status not found")
+
+    with open(status_path, "r") as f:
+        return json.load(f)
