@@ -241,6 +241,66 @@ def execute_terraform(req: TerraformExecuteRequest):
         }
     }
 
+@app.get("/runs/{run_id}/status")
+def get_run_status(run_id: str):
+    """Get current status of a terraform run."""
+    run_path = os.path.join("runs", run_id)
+    status_path = os.path.join(run_path, "status.json")
+    
+    if not os.path.exists(run_path):
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    
+    if not os.path.exists(status_path):
+        return {
+            "run_id": run_id,
+            "status": "initializing",
+            "phase": "starting",
+            "updated_at": time.time()
+        }
+    
+    try:
+        with open(status_path, "r") as f:
+            status_data = json.load(f)
+        
+        # Add terraform state if execution completed
+        tfstate_path = os.path.join(run_path, "terraform.tfstate")
+        if status_data.get("status") == "completed" and os.path.exists(tfstate_path):
+            with open(tfstate_path, "r") as f:
+                status_data["tfstate"] = json.load(f)
+        
+        status_data["run_id"] = run_id
+        return status_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read status: {str(e)}")
+
+@app.get("/runs/{run_id}/logs")
+def get_run_logs(run_id: str):
+    """Get execution logs for a terraform run."""
+    run_path = os.path.join("runs", run_id)
+    log_path = os.path.join(run_path, "executor.log")
+    
+    if not os.path.exists(run_path):
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    
+    if not os.path.exists(log_path):
+        return {
+            "run_id": run_id,
+            "logs": "Execution not started yet. Logs will appear once execution begins.",
+            "lines": []
+        }
+    
+    try:
+        with open(log_path, "r") as f:
+            logs = f.read()
+        
+        return {
+            "run_id": run_id,
+            "logs": logs,
+            "lines": logs.split("\n") if logs else []
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read logs: {str(e)}")
+
 @app.get("/runs/{run_id}/terminal")
 def stream_terminal(run_id: str):
     log_path = os.path.join("runs", run_id, "executor.log")
@@ -267,13 +327,3 @@ def stream_terminal(run_id: str):
             time.sleep(1)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-@app.get("/runs/{run_id}/status")
-def get_run_status(run_id: str):
-    status_path = os.path.join("runs", run_id, "status.json")
-
-    if not os.path.exists(status_path):
-        raise HTTPException(status_code=404, detail="Status not found")
-
-    with open(status_path, "r") as f:
-        return json.load(f)
