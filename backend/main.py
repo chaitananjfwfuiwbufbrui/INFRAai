@@ -7,6 +7,7 @@ import os
 from fastapi import HTTPException
 from services.canvas_compiler import compile_to_canvas
 from services.graph_generator import InfraGraphGenerator
+from services.planner_agent import PlannerAgent
 from fastapi import Depends
 from auth.clerk import get_current_user
 from pydantic import BaseModel
@@ -29,6 +30,7 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 generator = InfraGraphGenerator()
+planner = PlannerAgent()
 
 # ---------------- DB ----------------
 def get_db():
@@ -98,6 +100,11 @@ async def generate_graph(
         nodes = fetch_nodes_from_db()
 
         image_path = None
+        plan = None
+
+        # ---------- GENERATE PLAN ----------
+        if prompt:
+            plan = planner.plan(prompt)
 
         # ---------- IMAGE FLOW ----------
         if image:
@@ -109,7 +116,8 @@ async def generate_graph(
                 user_prompt=prompt or "",
                 available_nodes=nodes,
                 input_type="image",
-                image_path=image_path
+                image_path=image_path,
+                plan=plan
             )
 
         # ---------- TEXT FLOW ----------
@@ -120,7 +128,8 @@ async def generate_graph(
             logical_graph = generator.generate(
                 user_prompt=prompt,
                 available_nodes=nodes,
-                input_type="text"
+                input_type="text",
+                plan=plan
             )
 
         canvas_graph = compile_to_canvas(logical_graph["graph"])
@@ -145,6 +154,7 @@ async def generate_graph(
         conn.close()
 
         return {
+            "plan": plan.dict() if plan else None,
             "summary": logical_graph["summary"],
             "graph": canvas_graph
         }

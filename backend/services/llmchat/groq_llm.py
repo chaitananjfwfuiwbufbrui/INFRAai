@@ -17,7 +17,33 @@ class GroqLLM(BaseLLM):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-
+    
+    def generate(self, messages, response_schema=None, **kwargs):
+        """
+        Generate response from Groq.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            response_schema: Optional Pydantic model for structured output
+            
+        Returns:
+            String if no schema provided, Pydantic instance if schema provided
+        """
+        if response_schema:
+            # Get JSON response and convert to Pydantic instance
+            json_data = self.generate_json(messages)
+            return response_schema(**json_data)
+        
+        # Return plain text
+        completion = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=self.temperature,
+            max_completion_tokens=self.max_tokens,
+        )
+        
+        return completion.choices[0].message.content
+    
     def stream(self, messages):
         completion = self.client.chat.completions.create(
             model=self.model,

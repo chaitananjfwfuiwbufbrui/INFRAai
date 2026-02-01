@@ -6,11 +6,28 @@ class InfraGraphGenerator:
         self.llm = get_llm(llm_provider)
 
     # -------- TEXT PROMPT --------
-    def build_prompt(self, user_prompt, available_nodes):
+    def build_prompt(self, user_prompt, available_nodes, plan=None):
+        system_content = open("services/prompts/infra_graph.txt").read()
+        
+        # Add plan context if provided
+        if plan:
+            plan_context = f"""
+INFRASTRUCTURE PLAN CONTEXT:
+- Cloud: {plan.cloud}
+- Region: {plan.region}
+- Machine Type: {plan.machine_type}
+- Stack Type: {plan.stack_type}
+- Resources: {', '.join(plan.resources)}
+- Autoscaling: {plan.autoscaling}
+
+Use this plan to guide your infrastructure graph generation.
+"""
+            system_content = system_content + "\n\n" + plan_context
+        
         return [
             {
                 "role": "system",
-                "content": open("services/prompts/infra_graph.txt").read()
+                "content": system_content
             },
             {
                 "role": "user",
@@ -65,7 +82,7 @@ Available nodes (JSON):
         return graph
 
     # -------- GENERATE --------
-    def generate(self, user_prompt, available_nodes, input_type="text", image_path=None):
+    def generate(self, user_prompt, available_nodes, input_type="text", image_path=None, plan=None):
 
         # 🔥 IMAGE FLOW (2 STEP)
         if input_type == "image":
@@ -81,11 +98,11 @@ Available nodes (JSON):
                 + ", ".join(services)
             )
 
-            messages = self.build_prompt(text_prompt, available_nodes)
+            messages = self.build_prompt(text_prompt, available_nodes, plan)
             response = self.llm.generate_json(messages)
 
         else:
-            messages = self.build_prompt(user_prompt, available_nodes)
+            messages = self.build_prompt(user_prompt, available_nodes, plan)
             response = self.llm.generate_json(messages)
 
         graph = self.normalize(response.get("graph", {}))

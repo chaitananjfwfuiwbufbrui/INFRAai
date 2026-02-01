@@ -16,7 +16,8 @@ clerk_*.pem
 ########################################
 # 🐍 PYTHON / FASTAPI
 ########################################
-
+.firebase
+.git
 # Virtual environments
 venv/
 .env/
