@@ -2,7 +2,7 @@ from services.llmchat.factory import get_llm
 
 
 class InfraGraphGenerator:
-    def __init__(self, llm_provider="groq"):
+    def __init__(self, llm_provider=None):
         self.llm = get_llm(llm_provider)
 
     # -------- TEXT PROMPT --------

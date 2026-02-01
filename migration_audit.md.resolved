@@ -1,0 +1,813 @@
+# INFRAai Migration Audit Report
+**Auditor Role:** Senior Staff Engineer  
+**Source of Truth:** [planner.md](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/planner.md) (complete, authoritative scope)  
+**Audit Date:** 2026-02-01  
+**Purpose:** Analysis-only audit of target architecture vs. current state
+
+---
+
+## SECTION 1: Immutable Contracts
+
+### 1.1 JSON Schemas (Pydantic Models)
+
+#### InfraPlan (Phase 2)
+```python
+class MonitoringPolicy(BaseModel):
+    resource_ref: str          # matches resource name in plan
+    metric_name: str           # e.g., "cpu_high"
+    metric_path: str           # full GCP metric string
+    threshold: float
+    duration: str              # "60s"
+    severity: str              # "critical" | "warning"
+
+class InfraPlan(BaseModel):
+    cloud: str                    # "gcp"
+    stack_type: str               # "backend_api", "web_app"
+    region: str                   # "asia-south1"
+    machine_type: str             # "e2-standard-4"
+    autoscaling: bool
+    estimated_cost_usd: float
+    risk_flags: List[str]         # ["firewall", "cost_spike"]
+    resources: List[str]          # ["compute_instance", "cloud_sql"] - ✅ ADDED
+    monitoring: List[MonitoringPolicy]  # REQUIRED for Phase 5
+```
+
+#### OpsDecision (Phase 6)
+```python
+class OpsDecision(BaseModel):
+    severity: str                 # "low", "medium", "high"
+    recommended_action: str       # "scale_up_vm", "restart"
+    requires_approval: bool
+    confidence: float             # 0.0 – 1.0
+    reasoning: str                # Why this decision
+```
+
+#### TerraformFiles (Phase 3)
+```python
+class TerraformFiles(BaseModel):
+    main_tf: str
+    variables_tf: str
+    outputs_tf: str
+```
+
+**✅ DECISION CONFIRMED:** This schema is explicitly defined as minimal and sufficient for hackathon scope. Additional files (providers.tf, backend.tf) are generated internally by TerraformGenerator and not exposed to the LLM. Rationale: Avoids schema sprawl, keeps LLM output constrained and deterministic.
+
+### 1.2 API Interfaces
+
+#### Existing Endpoints (Must Preserve)
+```
+GET  /nodes
+POST /generate-graph
+POST /generate_terraform
+GET  /{run_id}
+POST /execute
+GET  /runs/{run_id}/status
+GET  /runs/{run_id}/terminal
+```
+
+#### New Endpoints (Must Add)
+```
+POST /ops/webhook                    # Phase 5 - GCP alert receiver
+GET  /ops/alerts                     # Phase 9 - Alert feed (filterable)
+POST /ops/alerts/{id}/approve        # Phase 9 - Trigger action executor
+POST /ops/alerts/{id}/reject         # Phase 9 - Reject action
+```
+
+#### Modified Endpoint Contracts
+
+**POST /generate-graph**
+- **Current Response:**
+  ```json
+  {
+    "summary": "...",
+    "graph": { ... }
+  }
+  ```
+- **Target Response (Phase 2.3):**
+  ```json
+  {
+    "plan": {
+      "cloud": "gcp",
+      "stack_type": "backend_api",
+      "region": "asia-south1",
+      "machine_type": "e2-standard-4",
+      "autoscaling": false,
+      "estimated_cost_usd": 82.0,
+      "risk_flags": ["firewall"],
+      "monitoring": [ ... ]
+    },
+    "summary": "...",
+    "graph": { ... }
+  }
+  ```
+
+**GET /runs/{run_id}/status**
+- **Current Response:**
+  ```json
+  {
+    "status": "running" | "completed" | "failed",
+    "phase": "applying",
+    "updated_at": 1234567890.0
+  }
+  ```
+- **Target Response (Phase 4.3):**
+  ```json
+  {
+    "status": "completed",
+    "phase": "verified",
+    "updated_at": 1234567890.0,
+    "verification": {
+      "reachable": true,
+      "ip": "34.x.x.x",
+      "status_code": 200
+    }
+  }
+  ```
+
+### 1.3 Approval Rules
+
+#### Human-in-the-Loop Gating (Phase 7)
+```python
+if alert.severity == "critical":
+    requires_approval = True
+elif alert.type in KNOWN_FIXES:
+    requires_approval = False   # auto-execute
+else:
+    requires_approval = True    # unknown → ask human
+```
+
+#### Known Auto-Fix Types (Do Not Require Approval)
+- CPU utilization high → Scale VM/ASG
+- Pod crash/restart loop → Restart pod
+- Disk usage full → Increase volume
+- Service health check failing → Redeploy
+- Memory pressure → Scale up tier
+- Firewall blocking traffic → Modify rule
+
+#### Kill-Switch Override (Phase 7.2)
+- **Command:** `STOP AUTONOMY` (Telegram/Discord)
+- **Effect:** Global flag halts ALL pending and future autonomous actions
+- **Reset:** Manual intervention required
+
+---
+
+## SECTION 2: Component Inventory
+
+### Phase 1: LLM Migration
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **GeminiProvider** | LLM abstraction for Gemini 2.5 Pro | `messages: List[dict]`, `response_schema: BaseModel` (optional) | [str](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/main.py#239-258) or `BaseModel` instance |
+| **schemas.py** | Pydantic models for structured LLM outputs | N/A | `InfraPlan`, `OpsDecision`, `TerraformFiles` |
+
+**Files to Create:**
+- `backend/services/llmchat/gemini_provider.py` (new class in factory.py)
+- `backend/services/schemas.py`
+
+**Files to Modify:**
+- [backend/services/llmchat/factory.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/services/llmchat/factory.py) - add `GeminiProvider`
+- [backend/services/graph_generator.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/services/graph_generator.py) - swap LLM instantiation
+- [backend/.env](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/.env) - add `LLM_PROVIDER=gemini`, `GEMINI_API_KEY=...`
+
+---
+
+### Phase 2: Planner Agent
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **PlannerAgent** | Architectural planning with cost/risk analysis | `goal: str` | `InfraPlan` |
+| **planner.py (prompt)** | System prompt for planning LLM | N/A | Prompt string |
+| **_bind_monitoring()** | Bind metric profiles to planned resources | `plan: InfraPlan` | `List[MonitoringPolicy]` |
+
+**Files to Create:**
+- `backend/services/planner_agent.py`
+- `backend/services/prompts/planner.py`
+
+**Files to Modify:**
+- [backend/main.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/main.py) → `POST /generate-graph` - inject planner before graph generation
+
+---
+
+### Phase 3: Terraform Validation & Auto-Fix
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **TerraformFixAgent** | Auto-fix Terraform validation errors using Gemini | `error: str`, `current_files: dict` | `dict` (corrected .tf files) |
+| **terraform_validate()** | Run `terraform validate` | `run_id: str` | `result` (success, stderr) |
+| **Validation Loop** | Retry validation with auto-fix (max 3 attempts) | `run_id: str` | Status update |
+
+**Files to Create:**
+- `backend/services/terraform_fix_agent.py`
+
+**Files to Modify:**
+- [backend/services/terraform_executor.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/services/terraform_executor.py) - insert validation loop before apply
+- Status phases updated to: `starting → initializing → validating → fix_attempt_1 → fix_attempt_2 → planning → applying → finalizing`
+
+---
+
+### Phase 4: Post-Deployment Verification
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **VerificationAgent** | HTTP health check after deployment | `run_id: str` | `dict` (reachable, ip, status_code) |
+| **extract_public_ip()** | Parse Terraform output for VM external IP | `run_id: str` | [str](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/main.py#239-258) (IP address) |
+
+**Files to Create:**
+- `backend/services/verification_agent.py`
+
+**Files to Modify:**
+- [backend/services/terraform_executor.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/services/terraform_executor.py) - call verification after successful apply
+- [backend/main.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/main.py) → `GET /runs/{run_id}/status` - add verification field to response
+
+---
+
+### Phase 5: Autonomous Monitoring
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **METRIC_PROFILES** | Resource-to-metric mapping registry | N/A | `dict` |
+| **generate_monitoring_tf()** | Generate alert policies as Terraform | `plan: InfraPlan` | [str](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/main.py#239-258) (.tf blocks) |
+| **normalize_alert()** | Parse GCP webhook payload | `payload: dict` | `dict` (normalized alert) |
+| **ops_webhook endpoint** | Receive GCP alerts | `payload: dict` | `dict` (ack response) |
+
+**Files to Create:**
+- `backend/services/monitoring/metric_profiles.py`
+- [backend/main.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/main.py) → `POST /ops/webhook`
+
+**Files to Modify:**
+- `backend/services/planner_agent.py` - add `_bind_monitoring()` method
+- [backend/services/terraform_generator.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/services/terraform_generator.py) - add `generate_monitoring_tf()`
+- `backend/schemas.py` - add `MonitoringPolicy` to `InfraPlan`
+
+**Database Tables to Create:**
+```sql
+CREATE TABLE ops_alerts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_name     TEXT,
+    resource        TEXT,
+    resource_type   TEXT,
+    cloud           TEXT DEFAULT 'gcp',
+    metric          TEXT,
+    value           REAL,
+    severity        TEXT,
+    decision_json   TEXT,
+    status          TEXT DEFAULT 'pending',
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+### Phase 5a: Deployment Metadata Registry
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **Metadata Document** | Stateful deployment context | Terraform output | JSON document |
+| **resource_map** | Link live resources to run_id | `terraform output` | `dict` |
+
+**✅ DECISION CONFIRMED:** SQLite (existing DB) for hackathon scope.
+
+**Rationale:**
+- Zero additional infrastructure
+- Durable across restarts
+- Simple joins for `lookup_run_for_resource()`
+- Redis/Firestore explicitly deferred as post-demo scalability improvements
+
+**Metadata Schema:**
+```json
+{
+  "deployment_id": "abc123",
+  "cloud": "gcp",
+  "services": ["compute_instance", "cloud_sql"],
+  "region": "asia-south1",
+  "terraform_state": "gs://bucket/state/abc123",
+  "alert_webhook": "https://ops-agent/webhook",
+  "resource_map": { "backend-vm-1": "run_abc123" },
+  "monitoring": [
+    { "resource": "backend-vm-1", "policy": "cpu_high", "threshold": 0.80 }
+  ]
+}
+```
+
+**Files to Create:**
+- `backend/services/metadata_registry.py` (storage abstraction)
+
+**Files to Modify:**
+- [backend/services/terraform_executor.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/services/terraform_executor.py) - persist metadata after successful apply
+
+---
+
+### Phase 6: Ops Decision Agent
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **OpsDecisionAgent** | Gemini-powered operational decision making | `alert: dict` | `OpsDecision` |
+| **ops_decision.py (prompt)** | System prompt for ops reasoning | N/A | Prompt string |
+| **Decision routing** | Auto-execute or escalate based on decision | `decision: OpsDecision` | Action trigger |
+
+**Files to Create:**
+- `backend/services/ops_decision_agent.py`
+- `backend/services/prompts/ops_decision.py`
+
+**Files to Modify:**
+- [backend/main.py](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/backend/main.py) → `POST /ops/webhook` - call `OpsDecisionAgent.decide()`
+
+---
+
+### Phase 7: Human-in-the-Loop
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **Telegram Bot** | Approval notifications | `alert: dict`, `decision: OpsDecision` | Message sent |
+| **Approval Listener** | Handle human responses | Telegram message | Execute or reject action |
+| **Kill-Switch Handler** | Halt all autonomy | `STOP AUTONOMY` command | Global flag set |
+
+**Files to Create:**
+- `backend/services/hitl/telegram_bot.py`
+
+**Environment Variables Required:**
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `HITL_CHANNEL` (telegram | discord)
+
+**OPTIONAL (Phase 7.3):**
+- `backend/services/hitl/discord_bot.py` - fallback channel
+
+---
+
+### Phase 8: Action Executor & Feedback Loop
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **ActionExecutor** | Execute approved/auto actions | `decision: OpsDecision`, `alert: dict` | `dict` (success, method) |
+| **_scale_up_vm()** | Modify Terraform + apply | `alert: dict` | `dict` |
+| **_restart_instance()** | GCP API direct call | `alert: dict` | `dict` |
+| **_modify_firewall()** | Terraform firewall rule change | `alert: dict` | `dict` |
+| **Feedback Loop** | Re-poll metric after action | `alert: dict` | Resolved status |
+
+**Files to Create:**
+- `backend/services/action_executor.py`
+
+**Action Methods Required:**
+- `_scale_up_vm()` - Gemini modifies Terraform → apply
+- `_restart_instance()` - GCP Compute API call
+- `_modify_firewall()` - Gemini modifies Terraform → apply
+
+**✅ DECISION CONFIRMED:** Implemented using GCP Monitoring API (simplified).
+
+**Implementation:**
+```python
+def poll_metric(resource_id, metric_path):
+    # Query last 5 minutes using timeSeries.list API
+    # ALIGN_MEAN aggregation
+    # Return latest aggregated value
+    # Compare against threshold from MonitoringPolicy
+```
+
+**Rationale:** Exact parity with alert policy not required; post-action trend validation is sufficient.
+
+---
+
+### Phase 9: Frontend Updates
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **OpsDashboard.tsx** | Real-time ops monitoring UI | GET /ops/alerts | Alert cards |
+| **Landing.tsx (updated)** | Show plan before canvas | `/generate-graph` response | Plan summary card |
+| **Deployment.tsx (updated)** | Verification status + dry-run | `/runs/{id}/status` | Verification card |
+
+**Files to Create:**
+- `frontend/cloud-canvas-gcp/src/pages/OpsDashboard.tsx`
+
+**Files to Modify:**
+- [frontend/cloud-canvas-gcp/src/pages/Landing.tsx](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/frontend/cloud-canvas-gcp/src/pages/Landing.tsx) - display plan summary
+- [frontend/cloud-canvas-gcp/src/pages/Deployment.tsx](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/frontend/cloud-canvas-gcp/src/pages/Deployment.tsx) - add verification card + dry-run panel
+- [frontend/cloud-canvas-gcp/src/App.tsx](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/frontend/cloud-canvas-gcp/src/App.tsx) - add `/ops` route
+- [frontend/cloud-canvas-gcp/src/components/shared/NavHeader.tsx](file:///c:/Users/Venkata%20Chaitanya/Desktop/INFRAai/frontend/cloud-canvas-gcp/src/components/shared/NavHeader.tsx) - add Ops Dashboard link
+
+**OpsDashboard Sections:**
+1. Active Alerts (poll every 5s)
+2. Pending Approvals (approve/reject buttons)
+3. Action History (with reasoning logs)
+
+---
+
+### Phase 10: Integration & Polish
+
+| Component | Purpose | Inputs | Outputs |
+|-----------|---------|--------|---------|
+| **test_e2e.py** | Smoke test all flows | N/A | Test results |
+| **Demo rehearsal script** | Step-by-step demo flow | N/A | Checklist |
+
+**Files to Create:**
+- `backend/test_e2e.py`
+
+**Environment Variables Checklist:**
+- `GEMINI_API_KEY`
+- `LLM_PROVIDER` = gemini
+- `CLERK_SECRET_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `GCP_PROJECT_ID`
+- `NGROK_URL` (for local webhook testing)
+- `HITL_CHANNEL` = telegram | discord
+- `REDIS_URL` or `FIRESTORE_PROJECT` (for metadata registry)
+
+---
+
+## SECTION 3: Execution Order
+
+### Critical Path (Sequential Dependencies)
+
+```
+Phase 1 (LLM Migration) [BLOCKER]
+    ↓
+Phase 2 (Planner Agent)
+    ↓
+Phase 5.2 (Upgrade Planner - monitoring)
+    ↓
+Phase 5.3 (Terraform Generator - monitoring)
+    ↓
+Phase 3 (Terraform Validation + Auto-Fix)
+    ↓
+Phase 4 (Verification Agent)
+    ↓
+Phase 5a (Metadata Registry)
+    ↓
+Phase 5.1 (Metric Profiles)
+    ↓
+Phase 5.4 (Ops Webhook)
+    ↓
+Phase 6 (Ops Decision Agent)
+    ↓
+Phase 7 (HITL - Telegram)
+    ↓
+Phase 8 (Action Executor + Feedback)
+    ↓
+Phase 9 (Frontend Updates)
+    ↓
+Phase 10 (Integration + Demo Polish)
+```
+
+### Parallel Execution Opportunities
+
+**After Phase 1 completes, these can run in parallel:**
+- Phase 2 (Planner Agent)
+- Phase 3 (Terraform Validation)
+- Phase 5.1 (Metric Profiles setup)
+
+**After Phase 3 completes:**
+- Phase 4 (Verification)
+- Phase 5a (Metadata Registry)
+
+**After Phase 6 completes:**
+- Phase 7 (Telegram bot)
+- Database table creation for `ops_alerts`
+
+### Recommended Build Sequence
+
+1. **Week 1: Foundation (Phases 1-3)**
+   - Day 1-2: Phase 1 (LLM migration + schemas)
+   - Day 3-4: Phase 2 (Planner Agent)
+   - Day 5-7: Phase 3 (Terraform validation loop)
+
+2. **Week 2: Deployment & Monitoring (Phases 4-5a)**
+   - Day 1-2: Phase 4 (Verification Agent)
+   - Day 3-5: Phase 5 (Monitoring - full implementation)
+   - Day 6-7: Phase 5a (Metadata Registry)
+
+3. **Week 3: Ops Autonomy (Phases 6-8)**
+   - Day 1-2: Phase 6 (Ops Decision Agent)
+   - Day 3-4: Phase 7 (Telegram HITL)
+   - Day 5-7: Phase 8 (Action Executor + Feedback)
+
+4. **Week 4: UI & Polish (Phases 9-10)**
+   - Day 1-3: Phase 9 (Frontend updates)
+   - Day 4-5: Phase 10 (Integration testing)
+   - Day 6-7: Demo rehearsal + bug fixes
+
+---
+
+## SECTION 4: Resolved Decisions (All 14 Items Confirmed)
+
+> **Status:** ✅ All critical, high, and medium-priority ambiguities have been resolved.  
+> **Ready to Build:** Yes - implementation can proceed immediately.
+
+---
+
+### 4.1 CRITICAL ITEMS (Resolved)
+
+#### ✅ #1: TerraformFiles Schema (Phase 3.2)
+
+**Decision:** Confirmed minimal 3-field schema
+
+```python
+class TerraformFiles(BaseModel):
+    main_tf: str
+    variables_tf: str
+    outputs_tf: str
+```
+
+**Rationale:** Avoids schema sprawl, keeps LLM output constrained and deterministic. Additional files (providers.tf, backend.tf) generated internally by TerraformGenerator and not exposed to LLM.
+
+---
+
+#### ✅ #2: poll_metric() Function (Phase 8.2)
+
+**Decision:** Implement using GCP Monitoring timeSeries.list API (simplified)
+
+**Specification:**
+- Query window: 1-5 minutes
+- Aggregation: `ALIGN_MEAN`
+- Same `metric_path` as alert policy
+- Comparison against threshold from `MonitoringPolicy`
+
+**Pseudo-implementation:**
+```python
+def poll_metric(resource_id, metric_path):
+    # Query last 5 minutes
+    # Return latest aggregated value
+```
+
+**Rationale:** Exact parity with alert policy not required; post-action trend validation is sufficient.
+
+---
+
+#### ✅ #3: Deployment Metadata Storage Backend (Phase 5a)
+
+**Decision:** SQLite (existing DB)
+
+**Rationale:**
+- Zero additional infrastructure
+- Durable across restarts
+- Simple joins for `lookup_run_for_resource()`
+- Redis/Firestore explicitly deferred as post-demo scalability improvements
+
+---
+
+#### ✅ #4: Missing resources Field in InfraPlan (Phase 5.2)
+
+**Decision:** Extended `InfraPlan` schema with explicit resources field
+
+```python
+resources: List[str]  # e.g. ["compute_instance", "cloud_sql"]
+```
+
+**Implementation Note:** PlannerAgent is responsible for populating this list based on `stack_type`.
+
+**Rationale:** Monitoring binding, metadata registry, and action execution all require explicit resource types.
+
+---
+
+### 4.2 HIGH PRIORITY ITEMS (Resolved)
+
+#### ✅ #5: Kill-Switch Storage Mechanism (Phase 7.2)
+
+**Decision:** Database-persisted flag in SQLite
+
+**Schema:**
+```sql
+CREATE TABLE ops_control_flags (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+```
+
+**Check Location:** Before every action execution in `ActionExecutor.execute()`
+
+**Rationale:** In-memory flags are unsafe across server restarts. Database persistence ensures kill-switch survives crashes/deploys.
+
+---
+
+#### ✅ #6: Webhook URL Lifecycle Management (Phase 5.3)
+
+**Decision:** Environment-injected, persisted per deployment
+
+**Implementation:**
+- `ops_webhook_url` injected at runtime via ENV (`NGROK_URL` or `PROD_URL`)
+- Persisted in deployment metadata
+- Alert policies reference this URL at Terraform apply time
+
+**Local Dev Handling:** NGROK URL refresh requires redeploy (acceptable for demo scope).
+
+---
+
+#### ✅ #7: Infinite Terraform Fix Loop Prevention (Phase 3.1)
+
+**Decision:** Stderr de-duplication guard
+
+**Implementation:**
+- `TerraformFixAgent` compares stderr across attempts
+- If stderr is identical for two consecutive attempts, validation fails early
+- Prevents LLM hallucination loops
+
+**Example Guard:**
+```python
+if prev_stderr == current_stderr:
+    raise ValidationError("LLM fix not converging")
+```
+
+---
+
+### 4.3 MEDIUM PRIORITY ITEMS (Resolved)
+
+#### ✅ #8: Verification Success Criteria (Phase 4.1)
+
+**Decision:** HTTP 200-299 only
+
+**Implementation:** `VerificationAgent` treats only HTTP 2xx responses as success. 403/404/401 considered deployment failures.
+
+**Change from Original:** Original spec allowed `status_code < 500`, which is too permissive.
+
+---
+
+#### ✅ #9: Synchronous vs. Async Action Execution (Phase 8.1)
+
+**Decision:** Async background execution (threaded)
+
+**Implementation:**
+- `ActionExecutor` runs Terraform and long-running operations in background threads
+- API immediately returns `status=executing`
+- Status polled via existing `/runs/{run_id}/status` pattern
+
+**Rationale:** Avoids blocking FastAPI workers without adding Celery/RQ complexity.
+
+---
+
+#### ✅ #10: METRIC_PROFILES Coverage Limitation (Phase 5.1)
+
+**Decision:** Explicitly limited for demo scope
+
+**Supported Resource Types:**
+- `google_compute_instance`
+- `google_sql_database_instance`
+- `google_compute_instance_group_manager`
+
+**Out of Scope (Documented):**
+- VPC, Subnet, Firewall, Load Balancer, Storage Bucket
+
+**Rationale:** Focused demo scope. Additional resource types documented as future work.
+
+---
+
+#### ✅ #11: Webhook Signature Verification (Phase 5.4)
+
+**Decision:** ⚠️ Documented but not implemented
+
+**Security Posture:**
+- GCP webhook signature verification acknowledged but omitted for hackathon scope
+- Endpoint protected by obscurity (unguessable NGROK URL) and firewall rules
+
+**Future Work:** Add GCP Cloud Monitoring signature validation post-demo.
+
+---
+
+### 4.4 LOW PRIORITY ITEMS (Resolved)
+
+#### ✅ #12: Dry-Run Preview Implementation (Phase 9.3)
+
+**Decision:** Terraform plan text output
+
+**Implementation:**
+- Dry-run preview implemented via `terraform plan` output rendered verbatim in UI
+- No semantic diff parsing required
+
+**UI Display:** Monaco editor in read-only mode or `<pre>` block.
+
+---
+
+#### ✅ #13: Cost Estimation Logic (Phase 2.1)
+
+**Decision:** Rule-based lookup table
+
+**Implementation:**
+```python
+COST_TABLE = {
+    "e2-standard-4": 0.134,  # USD per hour
+    "n1-standard-2": 0.095,
+    # ...
+}
+estimated_cost_usd = COST_TABLE[machine_type] * 730  # monthly
+```
+
+**Rationale:** GCP Pricing API integration explicitly deferred. Static table sufficient for demo.
+
+---
+
+#### ✅ #14: Multi-Cloud Scope Clarification (Add-ons)
+
+**Decision:** Architectural claim only (no code)
+
+**Implementation:**
+- Multi-cloud support is an architectural claim only
+- Adapter interfaces exist in design
+- Only GCP implementation shipped for demo
+
+**Documentation:** Frontend mentions "multi-cloud ready" but clarifies "GCP-only at launch" in fine print.
+
+---
+
+## Summary Table: All Resolutions
+
+| # | Item | Decision | Impact |
+|---|------|----------|--------|
+| 1 | TerraformFiles schema | 3-field minimal schema | ✅ Clear LLM contract |
+| 2 | poll_metric() function | GCP Monitoring API (simplified) | ✅ Feedback loop functional |
+| 3 | Metadata storage backend | SQLite | ✅ Zero infra overhead |
+| 4 | InfraPlan.resources field | Added to schema | ✅ Monitoring binding works |
+| 5 | Kill-switch storage | Database-persisted | ✅ Survives restarts |
+| 6 | Webhook URL lifecycle | Environment-injected | ✅ Works local + prod |
+| 7 | Infinite fix loop | Stderr deduplication | ✅ LLM convergence guard |
+| 8 | Verification criteria | HTTP 200-299 only | ✅ No false positives |
+| 9 | Action execution model | Async (threaded) | ✅ Non-blocking API |
+| 10 | METRIC_PROFILES coverage | 3 resource types only | ✅ Focused scope |
+| 11 | Webhook signature | Not implemented (documented) | ⚠️ Security tradeoff |
+| 12 | Dry-run preview | Terraform plan text | ✅ Simple implementation |
+| 13 | Cost estimation | Rule-based table | ✅ Demo-ready |
+| 14 | Multi-cloud scope | Architectural only | ✅ Marketing claim valid |
+
+---
+
+## Additional Implementation Notes
+
+### Database Schema Additions (Phase 5a)
+
+**New Table: `ops_control_flags`**
+```sql
+CREATE TABLE ops_control_flags (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+```
+
+**New Table: `deployment_metadata`** (for SQLite-based metadata registry)
+```sql
+CREATE TABLE deployment_metadata (
+    deployment_id TEXT PRIMARY KEY,
+    cloud TEXT,
+    services TEXT,              -- JSON array
+    region TEXT,
+    terraform_state_path TEXT,
+    alert_webhook_url TEXT,
+    resource_map TEXT,          -- JSON object
+    monitoring_policies TEXT,   -- JSON array
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**Modified Table: `ops_alerts`** (add index for filtering)
+```sql
+CREATE INDEX idx_ops_alerts_status ON ops_alerts(status);
+CREATE INDEX idx_ops_alerts_resource_type ON ops_alerts(resource_type);
+```
+
+---
+
+### Environment Variables (Updated for Resolved Decisions)
+
+**Critical (Must Set):**
+- `GEMINI_API_KEY`
+- `LLM_PROVIDER=gemini`
+- `CLERK_SECRET_KEY`
+- `GCP_PROJECT_ID`
+
+**Ops-Specific:**
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `HITL_CHANNEL=telegram` (or `discord`)
+- `NGROK_URL` (local dev) OR `PROD_WEBHOOK_URL` (production)
+
+**Removed (No Longer Needed):**
+- ~~`REDIS_URL`~~ (SQLite chosen)
+- ~~`FIRESTORE_PROJECT`~~ (SQLite chosen)
+
+---
+
+## Build Readiness Assessment
+
+| Category | Status | Notes |
+|----------|--------|-------|
+| **Schema Definitions** | ✅ Complete | All Pydantic models defined |
+| **API Contracts** | ✅ Complete | Request/response structures finalized |
+| **Storage Decisions** | ✅ Complete | SQLite for metadata + control flags |
+| **Security Model** | ⚠️ Partial | Webhook signature deferred, acceptable risk |
+| **Implementation Clarity** | ✅ Complete | All 14 ambiguities resolved |
+| **Phase Dependencies** | ✅ Mapped | Critical path documented in Section 3 |
+
+**Overall Status:** 🟢 **READY TO BUILD**
+
+**Next Action:** Begin Phase 1 (LLM Migration) immediately.
+
+---
+
+## End of Audit
+
+**Total Components:** 50+  
+**Total New Files:** 15+  
+**Total Modified Files:** 10+  
+**Execution Phases:** 10 (plus add-ons)  
+**Critical Ambiguities:** 0 (all resolved)  
+**High-Priority Gaps:** 0 (all resolved)  
+**Database Tables Added:** 2 (ops_control_flags, deployment_metadata)
+
+**Auditor Recommendation:** ✅ All blockers resolved. Proceed to Phase 1 implementation.
