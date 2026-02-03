@@ -268,6 +268,17 @@ def get_run_status(run_id: str):
             with open(tfstate_path, "r") as f:
                 status_data["tfstate"] = json.load(f)
         
+        # Add verification result if available
+        metadata_path = os.path.join(run_path, "metadata.json")
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, "r") as f:
+                    metadata = json.load(f)
+                    if "verification" in metadata:
+                        status_data["verification"] = metadata["verification"]
+            except json.JSONDecodeError:
+                pass
+        
         status_data["run_id"] = run_id
         return status_data
     except Exception as e:

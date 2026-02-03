@@ -5,6 +5,7 @@ import json
 import time
 from typing import Dict
 from services.terraform_fix_agent import TerraformFixAgent
+from services.verification_agent import VerificationAgent
 
 MAX_FIX_ATTEMPTS = 3
 
@@ -27,6 +28,7 @@ class TerraformExecutor:
 
         self.log_path = os.path.join(self.run_path, "executor.log")
         self.status_path = os.path.join(self.run_path, "status.json")
+        self.metadata_path = os.path.join(self.run_path, "metadata.json")
     
     def _set_phase(self, phase: str, error: str = None):
         """Update status with current phase and optional error."""
@@ -287,8 +289,24 @@ class TerraformExecutor:
                 self._set_phase("retrying_after_gcp_error")
                 time.sleep(30)
 
-            self._set_phase("finalizing")
-            self._update_status("completed")
+            # Post-deployment verification
+            self._set_phase("verifying")
+            self._log("Starting post-deployment verification...")
+            
+            run_id = os.path.basename(self.run_path)
+            verification_result = VerificationAgent.verify(run_id)
+            
+            # Store verification result in metadata
+            self._store_verification(verification_result)
+            
+            if verification_result["reachable"]:
+                self._log(f"Verification successful: {verification_result['ip']} returned status {verification_result['status_code']}")
+                self._set_phase("verified")
+                self._update_status("completed")
+            else:
+                self._log(f"Verification failed: {verification_result['ip']} is not reachable")
+                self._set_phase("verified")
+                self._update_status("deploy_success_verify_failed")
 
         except Exception as e:
             error_msg = f"{type(e).__name__}: {str(e)}"
@@ -298,6 +316,22 @@ class TerraformExecutor:
 
         finally:
             self._cleanup_creds()
+    
+    def _store_verification(self, verification_result: Dict):
+        """Store verification result in metadata.json."""
+        metadata = {}
+        if os.path.exists(self.metadata_path):
+            try:
+                with open(self.metadata_path, "r") as f:
+                    metadata = json.load(f)
+            except json.JSONDecodeError:
+                metadata = {}
+        
+        metadata["verification"] = verification_result
+        metadata["verification_timestamp"] = time.time()
+        
+        with open(self.metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
 
     # --------------------------------------------------
     # READ OUTPUTS
