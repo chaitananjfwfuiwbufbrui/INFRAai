@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, UploadFile, File, Form
+from fastapi import FastAPI, Query, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 import sqlite3
@@ -167,10 +167,12 @@ async def generate_graph(
 
 class TerraformGenerateRequest(BaseModel):
     infra_spec: dict
+    monitoring_policies: Optional[list] = []
+
 @app.post("/generate_terraform")
 def generate_terraform(req: TerraformGenerateRequest):
     tg = TerraformGenerator()
-    result = tg.generate_and_store(req.infra_spec)
+    result = tg.generate_and_store(req.infra_spec, req.monitoring_policies)
 
     return {
         "run_id": result["run_id"],
@@ -335,6 +337,90 @@ def stream_terminal(run_id: str):
                         yield "event: end\ndata: done\n\n"
                         break
 
-            time.sleep(1)
-
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+from services.hitl.telegram_bot import notify_decision, process_telegram_update
+from services.ops_decision_agent import OpsDecisionAgent
+
+# --------------------------------------------------
+# OPS WEBHOOK (PHASE 5)
+# --------------------------------------------------
+def normalize_alert(payload: dict) -> dict:
+    """Normalize GCP alert payload to flat dictionary."""
+    incident = payload.get("incident", {})
+    condition = incident.get("condition", {})
+    resource = incident.get("resource", {})
+    
+    return {
+        "policy_name": incident.get("policy_name"),
+        "resource": resource.get("labels", {}).get("instance_name"),
+        "metric": condition.get("metricType", "").split("/")[-1],
+        "value": condition.get("currentValue"),
+        "severity": incident.get("severity", "warning").lower(),
+        "cloud": "gcp",
+        "resource_type": resource.get("type", "unknown")
+    }
+
+@app.post("/ops/webhook")
+async def ops_webhook(payload: dict = Body(...)):
+    """
+    Receive alerts from GCP. Analyze with Gemini. Ask Human if critical.
+    """
+    try:
+        print("Received payload:", payload)
+        normalized = normalize_alert(payload)
+        
+        # Phase 6: Autonomous Decision
+        decision = OpsDecisionAgent.decide(normalized)
+        
+        # Save to DB
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO ops_alerts (
+                policy_name, resource, resource_type, cloud, metric, value, severity, decision_json, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        """, (
+            normalized["policy_name"],
+            normalized["resource"],
+            normalized["resource_type"],
+            normalized["cloud"],
+            normalized["metric"],
+            normalized["value"],
+            normalized["severity"],
+            decision.json()
+        ))
+        alert_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        
+        # Phase 7: HITL Notification
+        if decision.requires_approval:
+             notify_decision(normalized, decision, alert_id)
+
+        return {
+            "received": True, 
+            "alert_id": alert_id,
+            "decision": decision.dict()
+        }
+
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return {"received": False, "error": str(e)}
+
+
+# --------------------------------------------------
+# TELEGRAM WEBHOOK (PHASE 7)
+# --------------------------------------------------
+@app.post("/telegram/webhook")
+async def telegram_webhook(update: dict = Body(...)):
+    """
+    Receive updates from Telegram (replies, commands).
+    """
+    try:
+        process_telegram_update(update)
+        return {"ok": True}
+    except Exception as e:
+        print(f"Telegram webhook error: {e}")
+        return {"ok": False}

@@ -1,6 +1,8 @@
+from typing import List
 from services.llmchat.factory import get_llm
-from services.schemas import InfraPlan
+from services.schemas import InfraPlan, MonitoringPolicy
 from services.prompts.planner import PLANNER_SYSTEM_PROMPT
+from services.monitoring.metric_profiles import METRIC_PROFILES
 
 # GCP Machine Type Cost Table (USD per hour)
 COST_TABLE = {
@@ -40,4 +42,33 @@ class PlannerAgent:
         # Use Gemini with structured output
         plan = self.llm.generate(messages, response_schema=InfraPlan)
         
+        # Bind monitoring policies
+        plan.monitoring = self._bind_monitoring(plan)
+        
         return plan
+
+    def _bind_monitoring(self, plan: InfraPlan) -> List[MonitoringPolicy]:
+        policies = []
+        for resource_name in plan.resources:
+            # Simple heuristic: map resource name (e.g., "vm-1", "sql-1") to type
+            # In a real system, the plan would likely have structured resource objects with strict types
+            resource_type = "unknown"
+            
+            if "vm" in resource_name or "instance" in resource_name:
+                resource_type = "google_compute_instance"
+            elif "sql" in resource_name or "db" in resource_name:
+                resource_type = "google_sql_database_instance"
+            elif "asg" in resource_name or "group" in resource_name:
+                resource_type = "google_compute_instance_group_manager"
+
+            profiles = METRIC_PROFILES.get(resource_type, [])
+            for profile in profiles:
+                policies.append(MonitoringPolicy(
+                    resource_ref=resource_name,
+                    metric_name=profile["name"],
+                    metric_path=profile["metric"],
+                    threshold=profile["threshold"],
+                    duration=profile["duration"],
+                    severity=profile["severity"]
+                ))
+        return policies

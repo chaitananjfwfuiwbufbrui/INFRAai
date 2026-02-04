@@ -34,7 +34,7 @@ const AIChatPopup = ({ isOpen, onClose, initialMessage }: AIChatPopupProps) => {
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { loadArchitecture } = useArchitectureStore();
-const { getToken } = useAuth();
+  const { getToken } = useAuth();
   // Handle initial message from landing page
   useEffect(() => {
     if (initialMessage && !hasProcessedInitial) {
@@ -77,24 +77,29 @@ const { getToken } = useAuth();
       formData.append('prompt', prompt);
       const token = await getToken();
       if (!token) {
-      throw new Error("User not authenticated");
-    }
+        throw new Error("User not authenticated");
+      }
       const response = await fetch("http://localhost:8000/generate-graph", {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${token}`,
-  },
-  body: formData,
-});
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
       if (!response.ok) {
         throw new Error('Failed to generate architecture');
       }
 
       const data = await response.json();
-      
+
       // Load the graph into the canvas
       if (data.graph?.nodes && data.graph?.edges) {
         loadArchitecture(data.graph.nodes, data.graph.edges);
+      }
+
+      // Save monitoring policies if available
+      if (data.plan?.monitoring) {
+        useArchitectureStore.getState().setMonitoring(data.plan.monitoring);
       }
 
       // Add AI response with summary
@@ -193,7 +198,7 @@ const { getToken } = useAuth();
                 : 'bg-secondary text-secondary-foreground'
             )}
           >
-          {message.content}
+            {message.content}
           </div>
         ))}
         {isTyping && (

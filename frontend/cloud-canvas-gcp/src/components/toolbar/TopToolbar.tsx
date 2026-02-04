@@ -1,10 +1,10 @@
 import { useState, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { 
-  Save, 
-  CheckCircle, 
-  Undo2, 
-  Redo2, 
+import {
+  Save,
+  CheckCircle,
+  Undo2,
+  Redo2,
   Trash2,
   FileJson,
   Sun,
@@ -46,14 +46,14 @@ const TopToolbar = () => {
         type: node.data.icon || node.data.category,
         name: node.data.label.toLowerCase().replace(/\s+/g, '-'),
       };
-      
+
       // Add config values if available
       if (node.data.config) {
         Object.entries(node.data.config).forEach(([key, value]) => {
           baseResource[key] = value;
         });
       }
-      
+
       return baseResource;
     });
 
@@ -74,10 +74,11 @@ const TopToolbar = () => {
     }
 
     setIsGenerating(true);
-    
+
     try {
       const infraSpec = convertNodesToInfraSpec();
-      
+      const monitoring = useArchitectureStore.getState().monitoring;
+
       const response = await apiRequest<{ run_id: string; files: string[] }>(
         apiEndpoints.generateTerraform,
         {
@@ -86,12 +87,15 @@ const TopToolbar = () => {
             'accept': 'application/json',
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ infra_spec: infraSpec }),
+          body: JSON.stringify({
+            infra_spec: infraSpec,
+            monitoring_policies: monitoring
+          }),
         }
       );
-      
+
       toast.success('Terraform generated successfully!');
-      
+
       // Navigate to infrastructure page with run_id
       navigate('/infrastructure', { state: { runId: response.run_id } });
     } catch (error) {
@@ -105,7 +109,8 @@ const TopToolbar = () => {
   };
 
   const handleSave = () => {
-    const architecture = { nodes, edges };
+    const monitoring = useArchitectureStore.getState().monitoring;
+    const architecture = { nodes, edges, monitoring };
     localStorage.setItem('gcp-architecture', JSON.stringify(architecture));
     toast.success('Architecture saved successfully');
   };
@@ -170,9 +175,12 @@ const TopToolbar = () => {
       try {
         const content = event.target?.result as string;
         const data = JSON.parse(content);
-        
+
         if (data.nodes && Array.isArray(data.nodes) && data.edges && Array.isArray(data.edges)) {
           loadArchitecture(data.nodes, data.edges);
+          if (data.monitoring) {
+            useArchitectureStore.getState().setMonitoring(data.monitoring);
+          }
           toast.success('Architecture imported successfully');
           setIsValidated(false);
         } else {
@@ -187,7 +195,7 @@ const TopToolbar = () => {
       }
     };
     reader.readAsText(file);
-    
+
     // Reset input so same file can be imported again
     e.target.value = '';
   };
@@ -207,14 +215,14 @@ const TopToolbar = () => {
         <button className="toolbar-button" title="Redo">
           <Redo2 className="w-4 h-4" />
         </button>
-        
+
         <div className="w-px h-6 bg-border mx-2" />
-        
+
         <button className="toolbar-button" onClick={handleSave}>
           <Save className="w-4 h-4" />
           <span className="hidden sm:inline">Save</span>
         </button>
-        
+
         <button className="toolbar-button" onClick={handleImport}>
           <Upload className="w-4 h-4" />
           <span className="hidden sm:inline">Import</span>
@@ -226,12 +234,12 @@ const TopToolbar = () => {
           onChange={handleFileChange}
           className="hidden"
         />
-        
+
         <button className="toolbar-button" onClick={handleExport}>
           <FileJson className="w-4 h-4" />
           <span className="hidden sm:inline">Export</span>
         </button>
-        
+
         <button className="toolbar-button primary" onClick={handleValidate}>
           <CheckCircle className="w-4 h-4" />
           <span className="hidden sm:inline">Validate</span>
@@ -267,11 +275,11 @@ const TopToolbar = () => {
             )}
           </Button>
         )}
-        
+
         <div className="w-px h-6 bg-border mx-2" />
-        
-        <button 
-          className="toolbar-button text-destructive hover:bg-destructive/10" 
+
+        <button
+          className="toolbar-button text-destructive hover:bg-destructive/10"
           onClick={handleClear}
           title="Clear Canvas"
         >
@@ -297,7 +305,7 @@ const TopToolbar = () => {
           </SignInButton>
         </SignedOut>
         <SignedIn>
-          <UserButton 
+          <UserButton
             afterSignOutUrl="/"
             appearance={{
               elements: {

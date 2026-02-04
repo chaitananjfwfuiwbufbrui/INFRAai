@@ -14,7 +14,7 @@ interface ArchitectureState {
   nodes: Node<GCPNodeData>[];
   edges: Edge[];
   selectedNode: Node<GCPNodeData> | null;
-  
+
   // Actions
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
@@ -25,6 +25,9 @@ interface ArchitectureState {
   deleteSelectedNode: () => void;
   clearCanvas: () => void;
   loadArchitecture: (nodes: Node<GCPNodeData>[], edges: Edge[]) => void;
+
+  monitoring: any[];
+  setMonitoring: (policies: any[]) => void;
 }
 
 export const useArchitectureStore = create<ArchitectureState>((set, get) => ({
@@ -47,11 +50,11 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => ({
   onConnect: (connection) => {
     set({
       edges: addEdge(
-        { 
-          ...connection, 
+        {
+          ...connection,
           type: 'smoothstep',
           animated: true,
-        }, 
+        },
         get().edges
       ),
     });
@@ -80,7 +83,7 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => ({
   deleteSelectedNode: () => {
     const { selectedNode, nodes, edges } = get();
     if (!selectedNode) return;
-    
+
     set({
       nodes: nodes.filter((n) => n.id !== selectedNode.id),
       edges: edges.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id),
@@ -95,4 +98,7 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => ({
   loadArchitecture: (nodes, edges) => {
     set({ nodes, edges, selectedNode: null });
   },
+
+  monitoring: [],
+  setMonitoring: (policies) => set({ monitoring: policies }),
 }));
