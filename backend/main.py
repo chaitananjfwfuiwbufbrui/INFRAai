@@ -396,8 +396,9 @@ async def ops_webhook(payload: dict = Body(...)):
         conn.close()
         
         # Phase 7: HITL Notification
-        if decision.requires_approval:
-             notify_decision(normalized, decision, alert_id)
+        if True:
+            print("Sending notification to Telegram")
+            await notify_decision(normalized, decision, alert_id)
 
         return {
             "received": True, 
@@ -419,7 +420,8 @@ async def telegram_webhook(update: dict = Body(...)):
     Receive updates from Telegram (replies, commands).
     """
     try:
-        process_telegram_update(update)
+        print(f"[TELEGRAM UPDATE] {update}")
+        await process_telegram_update(update)
         return {"ok": True}
     except Exception as e:
         print(f"Telegram webhook error: {e}")

@@ -1,9 +1,12 @@
 import sqlite3
 import json
 
-DB_NAME = "nodes.db"
+import os
+
+DB_NAME = "C:\\Users\\Venkata Chaitanya\\Desktop\\INFRAai\\backend\\data\\nodes.db"
 
 def init_db():
+    os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 

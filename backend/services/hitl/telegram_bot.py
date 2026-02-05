@@ -1,14 +1,19 @@
 import os
-import requests
-import json
 import sqlite3
-from typing import Optional
+from telegram import Bot  # Fix: Import Bot directly
+from telegram.constants import ParseMode  # Optional: for better parse mode handling
 from services.schemas import OpsDecision
+from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Env vars
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "mock-token")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "mock-chat-id")
-API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+print(f"DEBUG: TELEGRAM_BOT_TOKEN loaded: {bool(TELEGRAM_BOT_TOKEN)}")
+print(f"DEBUG: TELEGRAM_CHAT_ID loaded: {TELEGRAM_CHAT_ID}")
 
 DB_NAME = "data/nodes.db"
 
@@ -17,7 +22,7 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-def notify_decision(alert: dict, decision: OpsDecision, alert_id: int):
+async def notify_decision(alert: dict, decision: OpsDecision, alert_id: int):
     """
     Send structured alert + decision to Telegram for approval.
     """
@@ -29,27 +34,22 @@ def notify_decision(alert: dict, decision: OpsDecision, alert_id: int):
         f"Action: `{decision.recommended_action}`\n"
         f"Confidence: `{decision.confidence}`\n"
         f"Reason: _{decision.reasoning}_\n\n"
-        f"Reply with:\n"
-        f"`APPROVE {alert_id}` to execute\n"
-        f"`REJECT {alert_id}` to ignore\n"
-        f"`STOP` to kill autonomy"
+        f"Reply 1 (approve) / 2 (ignore) / STOP AUTONOMY"
     )
     
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-
     try:
-        # Check if we are in a real env or test
-        if TELEGRAM_BOT_TOKEN != "mock-token":
-            requests.post(API_URL, json=payload, timeout=5)
-        else:
+        if TELEGRAM_BOT_TOKEN == "mock-token":
             print(f"[MOCK TELEGRAM] Sent to {TELEGRAM_CHAT_ID}: {text}")
+            return
+        
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)  # Fix: Use Bot directly
+        await bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=text,
+            parse_mode=ParseMode.MARKDOWN  # Better: use constant instead of string
+        )
     except Exception as e:
         print(f"Failed to send Telegram message: {e}")
-
 
 def check_kill_switch() -> bool:
     """Check if the global kill switch is active."""
@@ -60,11 +60,10 @@ def check_kill_switch() -> bool:
     conn.close()
     return row and row["value"] == "active"
 
-
-def process_telegram_update(update: dict):
+async def process_telegram_update(update: dict):
     """
     Process incoming webhook from Telegram.
-    Parse text for commands: STOP, APPROVE <id>, REJECT <id>.
+    Parse text for commands: STOP AUTONOMY, 1, 2.
     """
     message = update.get("message", {})
     text = message.get("text", "").strip()
@@ -72,40 +71,48 @@ def process_telegram_update(update: dict):
     
     if not text:
         return
-
+    
     response_text = "Did not understand command."
-
+    
     # 1. KILL CONTROL
-    if "STOP" in text.upper():
+    if "STOP AUTONOMY" in text.upper():
         conn = get_db()
         cur = conn.cursor()
         cur.execute("INSERT OR REPLACE INTO ops_control_flags (key, value) VALUES ('kill_switch', 'active')")
         conn.commit()
         conn.close()
         response_text = "🛑 AUTONOMY STOPPED. All future actions halted until manual reset."
-
-    # 2. APPROVAL FLOW
-    elif text.upper().startswith("APPROVE"):
-        try:
-            alert_id = int(text.split()[1])
+    
+    # 2. APPROVAL FLOW (1 = Approve latest pending)
+    elif text == "1":
+        alert = _get_latest_pending_alert()
+        if alert:
+            alert_id = alert["id"]
             _update_alert_status(alert_id, "approved")
-            # Logic to trigger ActionExecutor would go here (Phase 8)
             response_text = f"✅ Alert {alert_id} APPROVED. Action executing..."
-        except (IndexError, ValueError):
-            response_text = "Usage: APPROVE <alert_id>"
-
-    # 3. REJECTION FLOW
-    elif text.upper().startswith("REJECT"):
-        try:
-            alert_id = int(text.split()[1])
+        else:
+            response_text = "⚠️ No pending alerts found to approve."
+    
+    # 3. REJECTION FLOW (2 = Ignore latest pending)
+    elif text == "2":
+        alert = _get_latest_pending_alert()
+        if alert:
+            alert_id = alert["id"]
             _update_alert_status(alert_id, "rejected")
-            response_text = f"❌ Alert {alert_id} REJECTED."
-        except (IndexError, ValueError):
-            response_text = "Usage: REJECT <alert_id>"
-
+            response_text = f"❌ Alert {alert_id} REJECTED (Ignored)."
+        else:
+            response_text = "⚠️ No pending alerts found to reject."
+    
     # Reply to user
-    _send_reply(chat_id or TELEGRAM_CHAT_ID, response_text)
+    await _send_reply(chat_id or TELEGRAM_CHAT_ID, response_text)
 
+def _get_latest_pending_alert():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM ops_alerts WHERE status = 'pending' ORDER BY id DESC LIMIT 1")
+    row = cur.fetchone()
+    conn.close()
+    return row
 
 def _update_alert_status(alert_id: int, status: str):
     conn = get_db()
@@ -114,14 +121,13 @@ def _update_alert_status(alert_id: int, status: str):
     conn.commit()
     conn.close()
 
-
-def _send_reply(chat_id, text):
+async def _send_reply(chat_id, text):
     if TELEGRAM_BOT_TOKEN == "mock-token":
         print(f"[MOCK TELEGRAM] Reply to {chat_id}: {text}")
         return
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    
     try:
-        requests.post(url, json={"chat_id": chat_id, "text": text})
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)  # Fix: Use Bot directly
+        await bot.send_message(chat_id=chat_id, text=text)
     except Exception as e:
         print(f"Failed to reply: {e}")

@@ -32,5 +32,12 @@ Your specific instructions:
    - You SHOULD recommend auto-fixes (scale_up, restart) for known patterns (e.g., CPU > 90% -> scale_up) if you are confident (> 0.8).
    - You MUST recommend `escalate` for anything ambiguous or risky.
 
-Output must be valid JSON conforming to the OpsDecision schema.
+Output must be valid JSON conforming to the following structure exactly:
+{
+  "severity": "critical" | "warning" | "info",
+  "recommended_action": "scale_up_vm" | "restart_instance" | "modify_firewall" | "escalate" | "ignore",
+  "requires_approval": true | false,
+  "confidence": 0.0 to 1.0,
+  "reasoning": "string explanation"
+}
 """
