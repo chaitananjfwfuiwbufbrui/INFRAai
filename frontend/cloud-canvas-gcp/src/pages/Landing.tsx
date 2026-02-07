@@ -79,12 +79,12 @@ const Landing = () => {
       }
 
       // Navigate to canvas with the prompt and summary
-      navigate('/canvas', { 
-        state: { 
+      navigate('/canvas', {
+        state: {
           prompt: prompt.trim(),
           summary: data.summary,
-          openChat: true 
-        } 
+          openChat: true
+        }
       });
     } catch (error) {
       console.error('Error generating architecture:', error);
@@ -137,7 +137,7 @@ const Landing = () => {
               >
                 <Plus className="w-4 h-4" />
               </Button>
-              
+
               <SignedIn>
                 <Button
                   onClick={handleSubmit}
@@ -149,7 +149,7 @@ const Landing = () => {
                   {isLoading ? 'Generating...' : 'Plan'}
                 </Button>
               </SignedIn>
-              
+
               <SignedOut>
                 <SignInButton mode="modal">
                   <Button
@@ -168,10 +168,15 @@ const Landing = () => {
         {/* Projects Grid - Only shown when signed in */}
         <SignedIn>
           <div className="w-full max-w-5xl">
-            <h2 className="text-xl font-semibold text-foreground mb-4 flex items-center gap-2">
-              <LayoutGrid className="w-5 h-5" />
-              Last Worked On
-            </h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold text-foreground flex items-center gap-2">
+                <LayoutGrid className="w-5 h-5" />
+                Last Worked On
+              </h2>
+              <Button variant="ghost" size="sm" onClick={() => navigate('/ops')} className="text-muted-foreground hover:text-primary">
+                Go to Ops Dashboard →
+              </Button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {dummyProjects.map((project) => (
                 <div

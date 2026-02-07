@@ -6,6 +6,7 @@ import time
 from typing import Dict
 from services.terraform_fix_agent import TerraformFixAgent
 from services.verification_agent import VerificationAgent
+from services.deployment_registry import DeploymentRegistry
 
 MAX_FIX_ATTEMPTS = 3
 
@@ -302,11 +303,26 @@ class TerraformExecutor:
             if verification_result["reachable"]:
                 self._log(f"Verification successful: {verification_result['ip']} returned status {verification_result['status_code']}")
                 self._set_phase("verified")
+                self._set_phase("verified")
                 self._update_status("completed")
+                
+                # Register deployment in database (Phase 2)
+                try:
+                    self._register_deployment(run_id)
+                    self._log(f"Deployment {run_id} registered in database")
+                except Exception as e:
+                    self._log(f"WARNING: Failed to register deployment: {e}")
+
             else:
                 self._log(f"Verification failed: {verification_result['ip']} is not reachable")
                 self._set_phase("verified")
                 self._update_status("deploy_success_verify_failed")
+                
+                # Even if verification fails, the resources exist, so register them
+                try:
+                    self._register_deployment(run_id)
+                except Exception:
+                    pass
 
         except Exception as e:
             error_msg = f"{type(e).__name__}: {str(e)}"
@@ -354,3 +370,57 @@ class TerraformExecutor:
         except Exception as e:
             self._log(f"Failed to read outputs: {e}")
             return {}
+
+    # --------------------------------------------------
+    # REGISTRY (PHASE 2)
+    # --------------------------------------------------
+    def _register_deployment(self, run_id: str):
+        """Parse terraform.tfstate and register all resources."""
+        tfstate_path = os.path.join(self.run_path, "terraform.tfstate")
+        if not os.path.exists(tfstate_path):
+            return
+
+        with open(tfstate_path, "r") as f:
+            state = json.load(f)
+
+        registry = DeploymentRegistry()
+        
+        # 1. Register Deployment
+        deployment_id = registry.register_deployment(
+            run_id=run_id,
+            terraform_dir=self.run_path,
+            state_file_path=tfstate_path,
+            user_id="system" # TODO: Pass actual user_id
+        )
+
+        # 2. Extract Resources
+        resources = []
+        for module in state.get("resources", []):
+            # "resources": [ { "type": "google_compute_instance", ... } ]
+            # The top level resource object in state file v4
+            pass
+        
+        # NOTE: 'resources' in state root is usually a flat list in simpler states
+        # but standard parsing requires iterating modules.
+        # However, for this project the generator creates a flat root module.
+        
+        raw_resources = state.get("resources", [])
+        for r in raw_resources:
+            # Each r is a resource block
+            # instances list contains the actual created objects
+            for instance in r.get("instances", []):
+                # We want the resource name (e.g. "vm-1") and the GCP ID
+                attrs = instance.get("attributes", {})
+                
+                # Best effort name resolution
+                name = attrs.get("name") or getattr(r, "name", "unknown")
+                id_val = attrs.get("id") or "unknown"
+                
+                resources.append({
+                    "type": r.get("type"),
+                    "name": name,
+                    "id": id_val,
+                    "metadata": attrs
+                })
+
+        registry.register_resources(deployment_id, resources)

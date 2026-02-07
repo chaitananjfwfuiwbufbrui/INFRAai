@@ -37,6 +37,28 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_ops_alerts_status ON ops_alerts(status);
     CREATE INDEX IF NOT EXISTS idx_ops_alerts_resource_type ON ops_alerts(resource_type);
 
+    CREATE TABLE IF NOT EXISTS deployments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT UNIQUE NOT NULL,
+        user_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status TEXT,
+        terraform_dir TEXT,
+        state_file_path TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_deployments_run_id ON deployments(run_id);
+
+    CREATE TABLE IF NOT EXISTS resources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deployment_id INTEGER REFERENCES deployments(id),
+        resource_type TEXT,
+        resource_name TEXT,
+        resource_id TEXT,
+        metadata JSON, 
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_resources_name ON resources(resource_name);
+
     CREATE TABLE IF NOT EXISTS ops_control_flags (
         key TEXT PRIMARY KEY,
         value TEXT

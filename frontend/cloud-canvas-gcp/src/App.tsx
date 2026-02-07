@@ -8,6 +8,7 @@ import Landing from "./pages/Landing";
 import Index from "./pages/Index";
 import Deployment from "./pages/Deployment";
 import Infrastructure from "./pages/Infrastructure";
+import OpsDashboard from "./pages/OpsDashboard";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ const App = () => (
             <Route path="/canvas" element={<Index />} />
             <Route path="/deployment" element={<Deployment />} />
             <Route path="/infrastructure" element={<Infrastructure />} />
+            <Route path="/ops" element={<OpsDashboard />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

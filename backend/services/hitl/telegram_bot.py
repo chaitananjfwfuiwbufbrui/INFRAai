@@ -3,7 +3,11 @@ import sqlite3
 from telegram import Bot  # Fix: Import Bot directly
 from telegram.constants import ParseMode  # Optional: for better parse mode handling
 from services.schemas import OpsDecision
+from services.schemas import OpsDecision
+from services.action_executor import ActionExecutor
+from models.action_types import ActionRequest, ActionType
 from typing import Optional
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -89,7 +93,37 @@ async def process_telegram_update(update: dict):
         if alert:
             alert_id = alert["id"]
             _update_alert_status(alert_id, "approved")
-            response_text = f"✅ Alert {alert_id} APPROVED. Action executing..."
+            _update_alert_status(alert_id, "approved")
+            
+            # --- EXECUTE ACTION (Phase 1) ---
+            try:
+                decision_data = json.loads(alert["decision_json"])
+                
+                # Check kill switch before executing
+                if check_kill_switch():
+                    response_text = f"⚠️ Alert {alert_id} APPROVED, but AUTONOMY IS STOPPED. Action NOT executed."
+                else:
+                    executor = ActionExecutor()
+                    
+                    # Convert decision to ActionRequest
+                    req = ActionRequest(
+                        action_type=ActionType(decision_data.get("recommended_action")),
+                        resource_id=alert["resource"],
+                        parameters={}, # Parameters like node_count would come from decision or be inferred
+                        confidence=decision_data.get("confidence", 0.0),
+                        reason=decision_data.get("reasoning", "")
+                    )
+                    
+                    result = executor.execute_action(req)
+                    
+                    if result["success"]:
+                       response_text = f"✅ Alert {alert_id} APPROVED & EXECUTED.\nRun ID: {result.get('original_run_id')}"
+                       _update_alert_status(alert_id, "executed")
+                    else:
+                       response_text = f"⚠️ Alert {alert_id} APPROVED but execution failed.\nError: {result.get('error')}"
+            
+            except Exception as e:
+                response_text = f"⚠️ Execution Error: {str(e)}"
         else:
             response_text = "⚠️ No pending alerts found to approve."
     
