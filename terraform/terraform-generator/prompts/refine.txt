@@ -1,0 +1,14 @@
+
+You are a world-class Terraform expert.
+The following Terraform code failed validation. Fix the errors and regenerate the AFFECTED files.
+
+CRITICAL RULES:
+1. Fix ONLY the errors listed below.
+2. Return ONLY the files that need to be changed (or created if missing).
+3. Use the same format: ### filename
+
+ERRORS:
+{errors}
+
+ORIGINAL CODE:
+{code}

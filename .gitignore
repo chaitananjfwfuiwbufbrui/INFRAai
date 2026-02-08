@@ -1,0 +1,112 @@
+########################################
+# 🔐 SECURITY / SECRETS (CRITICAL)
+########################################
+
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.cert
+
+# Clerk / Auth keys
+clerk_public.pem
+clerk_*.pem
+
+########################################
+# 🐍 PYTHON / FASTAPI
+########################################
+.firebase
+.git
+# Virtual environments
+venv/
+.env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+########################################
+# 🗄 DATABASES / DATA
+########################################
+runs/
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# Local data
+data/
+uploads/
+
+########################################
+# ⚙ FASTAPI / BACKEND RUNTIME
+########################################
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+########################################
+# ⚛ FRONTEND (React + Vite)
+########################################
+
+node_modules/
+dist/
+build/
+
+# Vite env
+frontend/.env
+frontend/.env.*
+frontend/dist/
+
+########################################
+# 🧠 IDE / OS
+########################################
+
+# VS Code
+.vscode/
+
+# IntelliJ / PyCharm
+.idea/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# macOS
+.DS_Store
+
+########################################
+# 🧪 TEST / DEBUG
+########################################
+
+test.py
+test.jpeg
+*.http
+
+########################################
+# 📦 MISC
+########################################
+
+bun.lockb
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+.terraform.lock.hcl

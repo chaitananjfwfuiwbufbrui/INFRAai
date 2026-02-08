@@ -2,21 +2,32 @@ from services.llmchat.factory import get_llm
 
 
 class InfraGraphGenerator:
-    def __init__(self, llm_provider="gemini"):
+    def __init__(self, llm_provider=None):
         self.llm = get_llm(llm_provider)
 
-    # --------------------------------------------------
-    # TEXT PROMPT
-    # --------------------------------------------------
-    def build_prompt(self, user_prompt, available_nodes):
+    # -------- TEXT PROMPT --------
+    def build_prompt(self, user_prompt, available_nodes, plan=None):
+        system_content = open("services/prompts/infra_graph.txt").read()
+        
+        # Add plan context if provided
+        if plan:
+            plan_context = f"""
+INFRASTRUCTURE PLAN CONTEXT:
+- Cloud: {plan.cloud}
+- Region: {plan.region}
+- Machine Type: {plan.machine_type}
+- Stack Type: {plan.stack_type}
+- Resources: {', '.join(plan.resources)}
+- Autoscaling: {plan.autoscaling}
+
+Use this plan to guide your infrastructure graph generation.
+"""
+            system_content = system_content + "\n\n" + plan_context
+        
         return [
             {
                 "role": "system",
-                "content": open(
-                    "services/prompts/infra_graph.txt",
-                    "r",
-                    encoding="utf-8"
-                ).read()
+                "content": system_content
             },
             {
                 "role": "user",
@@ -30,152 +41,72 @@ Available nodes (JSON):
             }
         ]
 
-    # --------------------------------------------------
-    # IMAGE PROMPT
-    # --------------------------------------------------
-    def build_prompt_image(self):
-        return open(
-            "services/prompts/infra_graph_image.txt",
-            "r",
-            encoding="utf-8"
-        ).read()
+    # -------- IMAGE PROMPT --------
+    def image_instruction(self):
+        return open("services/prompts/infra_graph_image.txt").read()
 
-    # --------------------------------------------------
-    # GRAPH NORMALIZATION
-    # --------------------------------------------------
+    # -------- NORMALIZE --------
     def normalize(self, graph):
-        nodes = {n["id"]: n for n in graph.get("nodes", [])}
+        nodes = graph.get("nodes", [])
         edges = graph.get("edges", [])
 
-        def get_label(node_id):
-            return nodes[node_id]["data"]["label"]
+        ids = {n["id"] for n in nodes}
 
-        # ---------- 1. Ensure VPC ----------
-        has_vpc = any(n["data"]["label"] == "VPC" for n in nodes.values())
-        if not has_vpc:
-            vpc_node = {
-                "id": "vpc",
-                "type": "cloudNode",
-                "data": {
-                    "label": "VPC",
-                    "category": "networking",
-                    "icon": "vpc",
-                    "cloud": "aws"
-                },
-                "config": {}
-            }
-            graph["nodes"].insert(0, vpc_node)
-            nodes["vpc"] = vpc_node
+        def ensure_node(id_, label):
+            if id_ not in ids:
+                nodes.append({
+                    "id": id_,
+                    "type": "cloudNode",
+                    "data": {
+                        "label": label,
+                        "category": "networking",
+                        "icon": label.lower(),
+                        "cloud": "aws"
+                    },
+                    "config": {}
+                })
+                ids.add(id_)
 
-        # ---------- 2. Ensure Subnet ----------
-        has_subnet = any(n["data"]["label"] == "Subnet" for n in nodes.values())
-        if not has_subnet:
-            subnet_node = {
-                "id": "subnet",
-                "type": "cloudNode",
-                "data": {
-                    "label": "Subnet",
-                    "category": "networking",
-                    "icon": "subnet",
-                    "cloud": "aws"
-                },
-                "config": {}
-            }
-            graph["nodes"].append(subnet_node)
-            nodes["subnet"] = subnet_node
+        ensure_node("vpc", "VPC")
+        ensure_node("subnet", "Subnet")
 
+        if not any(e for e in edges if e["source"] == "vpc" and e["target"] == "subnet"):
             edges.append({
                 "source": "vpc",
                 "target": "subnet",
                 "relation": "contains"
             })
 
-        # ---------- 3. Clean invalid edges ----------
-        cleaned_edges = []
-        for e in edges:
-            if e["source"] not in nodes or e["target"] not in nodes:
-                continue
-
-            src_label = get_label(e["source"])
-            tgt_label = get_label(e["target"])
-
-            # ❌ EC2 → VPC
-            if src_label == "EC2" and tgt_label == "VPC":
-                continue
-
-            # ❌ Anything → Subnet except VPC
-            if tgt_label == "Subnet" and src_label != "VPC":
-                continue
-
-            cleaned_edges.append(e)
-
-        edges = cleaned_edges
-
-        # ---------- 4. Enforce hierarchy ----------
-        required_containment = {
-            "EC2": "subnet",
-            "RDS": "subnet"
-        }
-
-        for node_id, node in nodes.items():
-            label = node["data"]["label"]
-            if label in required_containment:
-                parent = required_containment[label]
-
-                exists = any(
-                    e["source"] == parent
-                    and e["target"] == node_id
-                    and e["relation"] == "contains"
-                    for e in edges
-                )
-
-                if not exists:
-                    edges.append({
-                        "source": parent,
-                        "target": node_id,
-                        "relation": "contains"
-                    })
-
+        graph["nodes"] = nodes
         graph["edges"] = edges
         return graph
 
-    # --------------------------------------------------
-    # GENERATE GRAPH
-    # --------------------------------------------------
-    def generate(
-        self,
-        user_prompt,
-        available_nodes,
-        input_type="text",
-        image_path=None
-    ):
-        # ---------- TEXT ----------
-        if input_type == "text":
-            messages = self.build_prompt(user_prompt, available_nodes)
-            response = self.llm.generate_json(messages)
+    # -------- GENERATE --------
+    def generate(self, user_prompt, available_nodes, input_type="text", image_path=None, plan=None):
 
-        # ---------- IMAGE ----------
-        elif input_type == "image":
-            if not image_path:
-                raise ValueError("image_path is required for image input")
-
-            instruction = self.build_prompt_image()
-            response = self.llm.generate_json_from_image(
+        # 🔥 IMAGE FLOW (2 STEP)
+        if input_type == "image":
+            detected = self.llm.detect_services_from_image(
                 image_path=image_path,
-                instruction=instruction
+                instruction=self.image_instruction()
             )
 
+            services = detected.get("services", [])
+
+            text_prompt = (
+                "Create a cloud infra graph using these services:\n"
+                + ", ".join(services)
+            )
+
+            messages = self.build_prompt(text_prompt, available_nodes, plan)
+            response = self.llm.generate_json(messages)
+
         else:
-            raise ValueError("input_type must be 'text' or 'image'")
+            messages = self.build_prompt(user_prompt, available_nodes, plan)
+            response = self.llm.generate_json(messages)
 
-        # ---------- EXTRACT ----------
-        summary = response.get("summary", "")
-        graph = response.get("graph", {})
-
-        # ---------- NORMALIZE ----------
-        graph = self.normalize(graph)
-
+        graph = self.normalize(response.get("graph", {}))
         return {
-            "summary": summary,
+            "summary": response.get("summary", ""),
             "graph": graph
         }

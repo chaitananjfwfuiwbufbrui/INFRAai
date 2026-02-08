@@ -1,469 +1,395 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Cloud, Key, CheckCircle2, Loader2, Copy, Sun, Moon, Terminal, Code2, Eye } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  Server,
+  Network,
+  Shield,
+  Database,
+  Scale,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  Terminal,
+  RefreshCw,
+  AlertCircle
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { useArchitectureStore } from '@/store/architectureStore';
-import { useTheme } from '@/hooks/useTheme';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import NavHeader from '@/components/shared/NavHeader';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
-const Deployment = () => {
+interface DeploymentStatus {
+  run_id: string;
+  status: 'running' | 'completed' | 'failed' | 'initializing';
+  phase?: string;
+  updated_at: number;
+  error?: string;
+  error_type?: string;
+  tfstate?: any;
+}
+
+interface LogsResponse {
+  run_id: string;
+  logs: string;
+  lines: string[];
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  starting: 'Starting',
+  initializing: 'Initializing Terraform',
+  validating: 'Validating Configuration',
+  fix_attempt_1: 'Auto-fixing (Attempt 1/3)',
+  fix_attempt_2: 'Auto-fixing (Attempt 2/3)',
+  fix_attempt_3: 'Auto-fixing (Attempt 3/3)',
+  planning: 'Planning Changes',
+  applying: 'Applying Infrastructure',
+  finalizing: 'Finalizing',
+};
+
+export default function Deployment() {
   const navigate = useNavigate();
-  const { nodes } = useArchitectureStore();
-  const { theme, toggleTheme } = useTheme();
-  const [projectId, setProjectId] = useState('');
-  const [serviceAccountKey, setServiceAccountKey] = useState('');
-  const [isDeploying, setIsDeploying] = useState(false);
-  const [viewMode, setViewMode] = useState<'nocode' | 'code'>('nocode');
-  const [deployedServices, setDeployedServices] = useState<string[]>([]);
+  const [searchParams] = useSearchParams();
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
-  const handleDeploy = () => {
-    if (!projectId || !serviceAccountKey) return;
-    
-    setIsDeploying(true);
-    // Simulate deployment
-    const services = nodes.map(n => n.data.label);
-    let index = 0;
-    
-    const interval = setInterval(() => {
-      if (index < services.length) {
-        setDeployedServices(prev => [...prev, services[index]]);
-        index++;
-      } else {
-        clearInterval(interval);
-        setIsDeploying(false);
+  const runId = searchParams.get('runId');
+  const projectId = searchParams.get('projectId');
+
+  const [status, setStatus] = useState<DeploymentStatus | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [resources, setResources] = useState<any[]>([]);
+
+  // Poll status and logs
+  useEffect(() => {
+    if (!runId) {
+      toast.error('No run ID provided');
+      navigate('/infrastructure');
+      return;
+    }
+
+    const fetchStatus = async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/runs/${runId}/status`);
+        const data: DeploymentStatus = await response.json();
+        setStatus(data);
+
+        // Extract resources from tfstate
+        if (data.tfstate && data.tfstate.resources) {
+          setResources(data.tfstate.resources);
+        }
+      } catch (error) {
+        console.error('Failed to fetch status:', error);
       }
-    }, 800);
+    };
+
+    const fetchLogs = async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/runs/${runId}/logs`);
+        const data: LogsResponse = await response.json();
+        setLogs(data.lines.filter(line => line.trim()));
+      } catch (error) {
+        console.error('Failed to fetch logs:', error);
+      }
+    };
+
+    // Initial fetch
+    fetchStatus();
+    fetchLogs();
+
+    // Poll every 2 seconds if still running
+    const statusInterval = setInterval(() => {
+      fetchStatus();
+    }, 2000);
+
+    const logsInterval = setInterval(() => {
+      fetchLogs();
+    }, 1000);
+
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(logsInterval);
+    };
+  }, [runId, navigate]);
+
+  // Auto-scroll logs to bottom
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
+  const handleRetry = async () => {
+    if (!runId || !projectId) {
+      toast.error('Missing run ID or project ID');
+      return;
+    }
+
+    setIsRetrying(true);
+
+    try {
+      const response = await fetch('http://localhost:8000/execute', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          run_id: runId,
+          action: 'apply',
+          project_id: projectId,
+          sa_key_json: '', // Should be stored somewhere
+          auto_approve: true,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Retry failed');
+
+      toast.success('Retrying deployment...');
+      setStatus(null);
+      setLogs([]);
+    } catch (error) {
+      console.error('Failed to retry:', error);
+      toast.error('Failed to retry deployment');
+    } finally {
+      setIsRetrying(false);
+    }
   };
 
-  const generateTerraformCode = () => {
-    let code = `# Generated Terraform Configuration
-# Project: ${projectId || 'your-project-id'}
+  const getStatusIcon = () => {
+    if (!status) return <Loader2 className="w-10 h-10 text-primary animate-spin" />;
 
-terraform {
-  required_providers {
-    google = {
-      source  = "hashicorp/google"
-      version = "~> 4.0"
+    switch (status.status) {
+      case 'completed':
+        return <CheckCircle2 className="w-10 h-10 text-green-500" />;
+      case 'failed':
+        return <XCircle className="w-10 h-10 text-red-500" />;
+      default:
+        return <Loader2 className="w-10 h-10 text-primary animate-spin" />;
     }
-  }
-}
-
-provider "google" {
-  project = "${projectId || 'your-project-id'}"
-  region  = "us-central1"
-}
-
-`;
-
-    nodes.forEach(node => {
-      const resourceName = node.data.label.toLowerCase().replace(/\s+/g, '_');
-      
-      switch (node.data.type) {
-        case 'compute_engine':
-          code += `# Compute Engine Instance
-resource "google_compute_instance" "${resourceName}" {
-  name         = "${resourceName}"
-  machine_type = "e2-medium"
-  zone         = "us-central1-a"
-
-  boot_disk {
-    initialize_params {
-      image = "debian-cloud/debian-11"
-    }
-  }
-
-  network_interface {
-    network = "default"
-    access_config {}
-  }
-}
-
-`;
-          break;
-        case 'cloud_run':
-          code += `# Cloud Run Service
-resource "google_cloud_run_service" "${resourceName}" {
-  name     = "${resourceName}"
-  location = "us-central1"
-
-  template {
-    spec {
-      containers {
-        image = "gcr.io/cloudrun/hello"
-      }
-    }
-  }
-}
-
-`;
-          break;
-        case 'cloud_storage':
-          code += `# Cloud Storage Bucket
-resource "google_storage_bucket" "${resourceName}" {
-  name          = "${resourceName}-\${random_id.bucket_suffix.hex}"
-  location      = "US"
-  force_destroy = true
-
-  uniform_bucket_level_access = true
-}
-
-`;
-          break;
-        case 'cloud_sql':
-          code += `# Cloud SQL Instance
-resource "google_sql_database_instance" "${resourceName}" {
-  name             = "${resourceName}"
-  database_version = "POSTGRES_14"
-  region           = "us-central1"
-
-  settings {
-    tier = "db-f1-micro"
-  }
-
-  deletion_protection = false
-}
-
-`;
-          break;
-        case 'vpc':
-          code += `# VPC Network
-resource "google_compute_network" "${resourceName}" {
-  name                    = "${resourceName}"
-  auto_create_subnetworks = false
-}
-
-`;
-          break;
-        case 'load_balancer':
-          code += `# HTTP Load Balancer
-resource "google_compute_global_forwarding_rule" "${resourceName}" {
-  name       = "${resourceName}"
-  target     = google_compute_target_http_proxy.${resourceName}_proxy.id
-  port_range = "80"
-}
-
-resource "google_compute_target_http_proxy" "${resourceName}_proxy" {
-  name    = "${resourceName}-proxy"
-  url_map = google_compute_url_map.${resourceName}_urlmap.id
-}
-
-resource "google_compute_url_map" "${resourceName}_urlmap" {
-  name            = "${resourceName}-urlmap"
-  default_service = google_compute_backend_service.${resourceName}_backend.id
-}
-
-`;
-          break;
-        case 'pubsub':
-          code += `# Pub/Sub Topic
-resource "google_pubsub_topic" "${resourceName}" {
-  name = "${resourceName}"
-}
-
-resource "google_pubsub_subscription" "${resourceName}_sub" {
-  name  = "${resourceName}-subscription"
-  topic = google_pubsub_topic.${resourceName}.name
-}
-
-`;
-          break;
-        case 'firestore':
-          code += `# Firestore Database
-resource "google_firestore_database" "${resourceName}" {
-  project     = "${projectId || 'your-project-id'}"
-  name        = "(default)"
-  location_id = "us-central"
-  type        = "FIRESTORE_NATIVE"
-}
-
-`;
-          break;
-        default:
-          code += `# ${node.data.label}
-# Resource configuration for ${node.data.type}
-# Add your configuration here
-
-`;
-      }
-    });
-
-    return code;
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(generateTerraformCode());
+  const getStatusColor = () => {
+    if (!status) return 'bg-primary/10';
+
+    switch (status.status) {
+      case 'completed':
+        return 'bg-green-500/10';
+      case 'failed':
+        return 'bg-red-500/10';
+      default:
+        return 'bg-primary/10';
+    }
+  };
+
+  const getStatusTitle = () => {
+    if (!status) return 'Loading...';
+
+    switch (status.status) {
+      case 'completed':
+        return 'Infrastructure Deployed Successfully';
+      case 'failed':
+        return 'Deployment Failed';
+      case 'running':
+        return status.phase ? PHASE_LABELS[status.phase] || status.phase : 'Deploying Infrastructure';
+      default:
+        return 'Initializing Deployment';
+    }
+  };
+
+  const getResourceIcon = (type: string) => {
+    if (type.includes('compute')) return Server;
+    if (type.includes('network') || type.includes('subnetwork')) return Network;
+    if (type.includes('firewall')) return Shield;
+    if (type.includes('storage') || type.includes('bucket')) return Database;
+    if (type.includes('load_balancer') || type.includes('forwarding')) return Scale;
+    return Server;
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="h-14 bg-sidebar border-b border-sidebar-border flex items-center justify-between px-4">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate('/canvas')}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-              <Cloud className="w-5 h-5 text-primary-foreground" />
-            </div>
-            <div>
-              <h1 className="font-bold text-foreground leading-none">Deploy Architecture</h1>
-              <span className="text-xs text-muted-foreground">GCP Deployment</span>
-            </div>
+    <div className="min-h-screen bg-background text-foreground">
+      <NavHeader showBackButton backPath="/infrastructure" />
+
+      <main className="container mx-auto px-4 py-8 space-y-6 max-w-7xl">
+        {/* Status Header */}
+        <div className="text-center py-6">
+          <div className={cn("inline-flex items-center justify-center w-20 h-20 rounded-full mb-4", getStatusColor())}>
+            {getStatusIcon()}
           </div>
-        </div>
-
-        <div className="flex items-center gap-4">
-          {/* View Toggle */}
-          <div className="flex items-center bg-secondary rounded-lg p-1">
-            <button
-              onClick={() => setViewMode('nocode')}
-              className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all',
-                viewMode === 'nocode'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Eye className="w-4 h-4" />
-              No Code
-            </button>
-            <button
-              onClick={() => setViewMode('code')}
-              className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all',
-                viewMode === 'code'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Code2 className="w-4 h-4" />
-              Code
-            </button>
-          </div>
-
-          {/* Theme Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
-          </Button>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="flex-1 flex">
-        {viewMode === 'nocode' ? (
-          <>
-            {/* Credentials Panel */}
-            <div className="w-96 border-r border-border bg-sidebar p-6 overflow-y-auto">
-              <h2 className="text-lg font-semibold text-foreground mb-6 flex items-center gap-2">
-                <Key className="w-5 h-5 text-primary" />
-                Cloud Credentials
-              </h2>
-
-              <div className="space-y-4">
-                <div>
-                  <Label htmlFor="projectId" className="text-foreground">GCP Project ID</Label>
-                  <Input
-                    id="projectId"
-                    value={projectId}
-                    onChange={(e) => setProjectId(e.target.value)}
-                    placeholder="my-gcp-project"
-                    className="mt-1.5"
-                  />
+          <h1 className="text-3xl font-bold mb-2">{getStatusTitle()}</h1>
+          {status?.phase && status.status === 'running' && (
+            <p className="text-muted-foreground">
+              {PHASE_LABELS[status.phase] || status.phase}
+            </p>
+          )}
+          {status?.error && (
+            <div className="mt-4 max-w-2xl mx-auto">
+              <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-left">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="font-medium text-red-500 mb-1">Error Details:</p>
+                    <p className="text-sm text-red-400 whitespace-pre-wrap font-mono">
+                      {status.error}
+                    </p>
+                  </div>
                 </div>
-
-                <div>
-                  <Label htmlFor="serviceKey" className="text-foreground">Service Account Key (JSON)</Label>
-                  <textarea
-                    id="serviceKey"
-                    value={serviceAccountKey}
-                    onChange={(e) => setServiceAccountKey(e.target.value)}
-                    placeholder='{"type": "service_account", ...}'
-                    className="mt-1.5 w-full h-32 px-3 py-2 bg-background border border-input rounded-lg text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                </div>
-
-                <Button
-                  onClick={handleDeploy}
-                  disabled={!projectId || !serviceAccountKey || isDeploying}
-                  className="w-full"
-                >
-                  {isDeploying ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Deploying...
-                    </>
-                  ) : (
-                    <>
-                      <Cloud className="w-4 h-4 mr-2" />
-                      Deploy to GCP
-                    </>
-                  )}
-                </Button>
               </div>
+            </div>
+          )}
 
-              <div className="mt-8">
-                <h3 className="text-sm font-medium text-foreground mb-3">Services to Deploy</h3>
-                <div className="space-y-2">
-                  {nodes.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No services in architecture</p>
+          {/* Deployment Info */}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+            {runId && (
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-muted text-muted-foreground text-sm font-mono">
+                Run: {runId}
+              </div>
+            )}
+            {projectId && (
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-muted text-muted-foreground text-sm font-mono">
+                Project: {projectId}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Terminal Logs */}
+          <Card className="border-border lg:col-span-1">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Terminal className="h-5 w-5" />
+                Execution Logs
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="h-[500px] w-full rounded-lg bg-black/90 p-4 font-mono text-sm">
+                <div className="space-y-1">
+                  {logs.length === 0 ? (
+                    <div className="text-green-400">Waiting for logs...</div>
                   ) : (
-                    nodes.map(node => (
+                    logs.map((line, index) => (
                       <div
-                        key={node.id}
-                        className="flex items-center gap-2 p-2 bg-secondary/50 rounded-lg text-sm"
+                        key={index}
+                        className={cn(
+                          "whitespace-pre-wrap break-all",
+                          line.includes('ERROR') || line.includes('FATAL') ? 'text-red-400' :
+                            line.includes('WARNING') || line.includes('WARN') ? 'text-yellow-400' :
+                              line.includes('SUCCESS') || line.includes('completed') ? 'text-green-400' :
+                                'text-gray-300'
+                        )}
                       >
-                        <div className={cn(
-                          'w-2 h-2 rounded-full',
-                          deployedServices.includes(node.data.label)
-                            ? 'bg-green-500'
-                            : 'bg-muted-foreground'
-                        )} />
-                        <span className="text-foreground">{node.data.label}</span>
+                        {line}
                       </div>
                     ))
                   )}
+                  <div ref={logsEndRef} />
                 </div>
-              </div>
-            </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
 
-            {/* Logs Panel */}
-            <div className="flex-1 bg-background p-6 overflow-y-auto">
-              <h2 className="text-lg font-semibold text-foreground mb-6 flex items-center gap-2">
-                <Terminal className="w-5 h-5 text-primary" />
-                Deployment Logs
-              </h2>
-
-              <div className="bg-[#1e1e1e] rounded-lg p-4 font-mono text-sm min-h-[400px]">
-                {deployedServices.length === 0 ? (
-                  <p className="text-[#6a9955]"># Waiting to start deployment...</p>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-[#569cd6]">$ terraform init</p>
-                    <p className="text-[#dcdcdc]">Initializing the backend...</p>
-                    <p className="text-[#dcdcdc]">Initializing provider plugins...</p>
-                    <p className="text-[#6a9955]">Terraform has been successfully initialized!</p>
-                    <br />
-                    <p className="text-[#569cd6]">$ terraform apply -auto-approve</p>
-                    <br />
-                    {deployedServices.map((service, index) => (
-                      <div key={service} className="space-y-1">
-                        <p className="text-[#dcdcdc]">
-                          <span className="text-[#4ec9b0]">google_resource.{service.toLowerCase().replace(/\s+/g, '_')}</span>: Creating...
-                        </p>
-                        <p className="text-[#6a9955]">
-                          <CheckCircle2 className="w-4 h-4 inline mr-1" />
-                          google_resource.{service.toLowerCase().replace(/\s+/g, '_')}: Creation complete
-                        </p>
-                      </div>
-                    ))}
-                    {!isDeploying && deployedServices.length === nodes.length && nodes.length > 0 && (
-                      <>
-                        <br />
-                        <p className="text-[#6a9955]">Apply complete! Resources: {nodes.length} added, 0 changed, 0 destroyed.</p>
-                      </>
-                    )}
+          {/* Resources */}
+          <Card className="border-border lg:col-span-1">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Server className="h-5 w-5" />
+                Resources {resources.length > 0 && `(${resources.length})`}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="h-[500px] w-full">
+                {status?.status === 'completed' && resources.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Database className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                    <p>No resources found in terraform state</p>
                   </div>
                 )}
-              </div>
-            </div>
-          </>
-        ) : (
-          /* Code View - VS Code Style */
-          <div className="flex-1 flex flex-col">
-            {/* File Tabs */}
-            <div className="h-10 bg-[#252526] border-b border-[#1e1e1e] flex items-center px-2">
-              <div className="flex items-center gap-1 px-3 py-1.5 bg-[#1e1e1e] text-[#cccccc] text-sm rounded-t">
-                <Code2 className="w-4 h-4 text-[#519aba]" />
-                main.tf
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={copyToClipboard}
-                className="ml-auto h-7 w-7 text-[#cccccc] hover:text-white hover:bg-[#3c3c3c]"
-                title="Copy to clipboard"
-              >
-                <Copy className="w-4 h-4" />
-              </Button>
-            </div>
+                {status?.status !== 'completed' && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Loader2 className="h-12 w-12 mx-auto mb-3 animate-spin" />
+                    <p>Resources will appear after deployment completes</p>
+                  </div>
+                )}
+                {resources.length > 0 && (
+                  <div className="space-y-3">
+                    {resources.map((resource, index) => {
+                      const ResourceIcon = getResourceIcon(resource.type);
+                      return (
+                        <div
+                          key={index}
+                          className="p-4 rounded-lg bg-muted/50 border border-border hover:border-primary/50 transition-colors"
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="p-2 rounded-lg bg-primary/10">
+                              <ResourceIcon className="h-5 w-5 text-primary" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold truncate">
+                                {resource.name}
+                              </div>
+                              <div className="text-sm text-muted-foreground font-mono truncate">
+                                {resource.type}
+                              </div>
+                              {resource.instances && resource.instances[0]?.attributes && (
+                                <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                  {resource.instances[0].attributes.zone && (
+                                    <div>Zone: {resource.instances[0].attributes.zone}</div>
+                                  )}
+                                  {resource.instances[0].attributes.machine_type && (
+                                    <div>Type: {resource.instances[0].attributes.machine_type}</div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-shrink-0">
+                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10 text-green-500 text-xs font-medium">
+                                <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                Active
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </div>
 
-            {/* Code Editor */}
-            <div className="flex-1 bg-[#1e1e1e] overflow-auto">
-              <div className="flex min-h-full">
-                {/* Line Numbers */}
-                <div className="py-4 px-3 text-right text-[#858585] text-sm font-mono select-none border-r border-[#3c3c3c] bg-[#1e1e1e]">
-                  {generateTerraformCode().split('\n').map((_, i) => (
-                    <div key={i} className="leading-6">{i + 1}</div>
-                  ))}
-                </div>
-
-                {/* Code Content */}
-                <pre className="flex-1 p-4 text-sm font-mono overflow-x-auto">
-                  <code>
-                    {generateTerraformCode().split('\n').map((line, i) => (
-                      <div key={i} className="leading-6">
-                        {line.startsWith('#') ? (
-                          <span className="text-[#6a9955]">{line}</span>
-                        ) : line.includes('resource') ? (
-                          <>
-                            <span className="text-[#569cd6]">resource</span>
-                            <span className="text-[#dcdcdc]">{line.replace('resource', '')}</span>
-                          </>
-                        ) : line.includes('provider') ? (
-                          <>
-                            <span className="text-[#569cd6]">provider</span>
-                            <span className="text-[#dcdcdc]">{line.replace('provider', '')}</span>
-                          </>
-                        ) : line.includes('terraform') ? (
-                          <>
-                            <span className="text-[#569cd6]">terraform</span>
-                            <span className="text-[#dcdcdc]">{line.replace('terraform', '')}</span>
-                          </>
-                        ) : line.includes('=') ? (
-                          <>
-                            <span className="text-[#9cdcfe]">{line.split('=')[0]}</span>
-                            <span className="text-[#dcdcdc]">=</span>
-                            <span className="text-[#ce9178]">{line.split('=').slice(1).join('=')}</span>
-                          </>
-                        ) : (
-                          <span className="text-[#dcdcdc]">{line}</span>
-                        )}
-                      </div>
-                    ))}
-                  </code>
-                </pre>
-              </div>
-            </div>
-
-            {/* Status Bar */}
-            <div className="h-6 bg-[#007acc] flex items-center justify-between px-3 text-[11px] text-white">
-              <div className="flex items-center gap-4">
-                <span>Terraform</span>
-                <span>UTF-8</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <span>Ln {generateTerraformCode().split('\n').length}, Col 1</span>
-                <span>Spaces: 2</span>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+        {/* Action Buttons */}
+        <div className="flex flex-col sm:flex-row gap-4 pt-4">
+          {status?.status === 'failed' && (
+            <Button
+              onClick={handleRetry}
+              size="lg"
+              className="flex-1 gap-2"
+              disabled={isRetrying}
+            >
+              {isRetrying ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Retrying...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-5 w-5" />
+                  Retry Deployment
+                </>
+              )}
+            </Button>
+          )}
+          {status?.status === 'completed' && (
+            <Button
+              onClick={() => navigate('/infrastructure')}
+              size="lg"
+              className="flex-1 gap-2"
+            >
+              View Infrastructure
+            </Button>
+          )}
+        </div>
+      </main>
     </div>
   );
-};
-
-export default Deployment;
+}
