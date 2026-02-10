@@ -105,6 +105,9 @@ class TerraformGenerator:
             "rds": "sql",
             "s3": "storage",
             "storage": "storage",
+            "compute engine": "vm",
+            "cloud sql": "sql",
+            "cloud storage": "storage",
         }
 
         resources: Dict[str, List[dict]] = {}

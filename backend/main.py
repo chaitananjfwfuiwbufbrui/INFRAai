@@ -165,18 +165,58 @@ async def generate_graph(
         raise HTTPException(status_code=500, detail=f"Graph generation failed: {str(e)}")
     
 
+from services.llm_terraform_generator import LLMTerraformGenerator
+import uuid
+from datetime import datetime
+
 class TerraformGenerateRequest(BaseModel):
     infra_spec: dict
     monitoring_policies: Optional[list] = []
 
 @app.post("/generate_terraform")
 def generate_terraform(req: TerraformGenerateRequest):
-    tg = TerraformGenerator()
-    result = tg.generate_and_store(req.infra_spec, req.monitoring_policies)
+    # Old logic:
+    # tg = TerraformGenerator() 
+    # result = tg.generate_and_store(req.infra_spec, req.monitoring_policies)
+    
+    # New logic using LLM Generator:
+    llm_tg = LLMTerraformGenerator()
+    
+    # Create run ID
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    uid = uuid.uuid4().hex[:6]
+    run_id = f"run_{ts}_{uid}"
+    
+    # Webhook URL
+    webhook_url = os.getenv("webhook", "http://localhost:8000/ops/webhook")
+
+    # Convert infra_spec to a prompt string
+    # We can just dump the JSON and ask LLM to generate based on it
+    prompt = f"Generate Terraform code for the following infrastructure specification:\n{json.dumps(req.infra_spec, indent=2)}\n"
+    prompt += f"\nIMPORTANT: Set the default value of the `ops_webhook_url` variable to '{webhook_url}'.\n"
+
+    if req.monitoring_policies:
+         prompt += f"\nAlso include the following monitoring policies:\n{json.dumps(req.monitoring_policies, indent=2)}"
+
+    result = llm_tg.generate(run_id=run_id, user_request=prompt)
+    
+    if not result["success"]:
+         raise HTTPException(status_code=500, detail=f"LLM Generation failed: {result.get('error')}")
+
+    # Read the generated files to return them
+    run_dir = result["run_dir"]
+    files = {}
+    for filename in os.listdir(run_dir):
+        if filename.endswith(".tf"):
+            with open(os.path.join(run_dir, filename), "r") as f:
+                files[filename] = f.read()
 
     return {
-        "run_id": result["run_id"],
-        "files": result["files"]
+        "run_id": run_id,
+        "files": files.keys(), # The frontend expects a list of filenames or dict? Previous return was {"files": list(files.keys())}
+        # Wait, the previous return was: "files": list(files.keys())
+        # Let's check the previous code... YES.
+        "files": list(files.keys()) 
     }
 
 
@@ -426,3 +466,66 @@ async def telegram_webhook(update: dict = Body(...)):
     except Exception as e:
         print(f"Telegram webhook error: {e}")
         return {"ok": False}
+
+# --------------------------------------------------
+# DEMO API (For testing Telegram Integration)
+# --------------------------------------------------
+@app.post("/demo/simulate-alert")
+async def demo_simulate_alert(resource_name: str = "demo-vm-1", severity: str = "CRITICAL"):
+    """
+    Simulate a GCP alert to trigger the Telegram bot.
+    """
+    import requests
+    
+    # --------------------------------------------------
+    # DEMO API (For testing Telegram Integration)
+    # --------------------------------------------------
+    # Removed DB resource creation logic as requested.
+    # Just simulates the alert payload.
+    
+    # 2. Trigger Webhook
+    payload = {
+        "incident": {
+            "incident_id": f"test-{uuid.uuid4().hex}",
+            "resource_id": "1234567890",
+            "resource_name": resource_name,
+            "state": "open",
+            "policy_name": "Demo High CPU Alert",
+            "condition": {
+                "name": "projects/demo/alertPolicies/123",
+                "displayName": "VM Instance - CPU utilization",
+                "conditionThreshold": {
+                    "filter": f"metric.type=\"compute.googleapis.com/instance/cpu/utilization\" resource.type=\"gce_instance\" metric.label.instance_name=\"{resource_name}\"",
+                    "comparison": "COMPARISON_GT",
+                    "thresholdValue": 0.8,
+                },
+                "metricType": "compute.googleapis.com/instance/cpu/utilization",
+                "currentValue": 0.95
+            },
+            "resource": {
+                "type": "gce_instance",
+                "labels": {
+                    "instance_name": resource_name,
+                    "project_id": "demo-project",
+                    "zone": "us-central1-a"
+                }
+            },
+            "severity": severity.upper()
+        },
+        "version": "1.2"
+    }
+    
+    # Call our own webhook
+    # Call our own webhook logic directly to avoid deadlock
+    try:
+        # requests.post is synchronous and blocks the event loop, causing a deadlock if the server has limited workers.
+        # Direct async call is safer and faster.
+        webhook_response = await ops_webhook(payload)
+        return {
+            "status": "sent", 
+            "webhook_response": webhook_response,
+            "simulated_payload": payload
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+

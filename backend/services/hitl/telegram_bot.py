@@ -137,6 +137,28 @@ async def process_telegram_update(update: dict):
         else:
             response_text = "⚠️ No pending alerts found to reject."
     
+    # 4. FREEFORM CONVERSATIONAL FLOW (Demo / Advanced)
+    else:
+        # User sent text that isn't a strict command. Treat as instruction.
+        alert = _get_latest_alert_context()
+        if alert:
+            resource_id = alert["resource"]
+            # Reply acknowledging receipt
+            await _send_reply(chat_id or TELEGRAM_CHAT_ID, f"🤖 Processing instruction for {resource_id}: '{text}'...")
+            
+            try:
+                executor = ActionExecutor()
+                result = executor.execute_freeform(resource_id, text)
+                
+                if result["success"]:
+                    response_text = f"✅ Success!\n{result['message']}\nRun ID: {result.get('original_run_id')}"
+                else:
+                    response_text = f"❌ Failed to execute instruction.\nError: {result.get('error')}"
+            except Exception as e:
+                response_text = f"⚠️ Error processing instruction: {str(e)}"
+        else:
+            response_text = "⚠️ No active or recent alert context found to apply this instruction to."
+
     # Reply to user
     await _send_reply(chat_id or TELEGRAM_CHAT_ID, response_text)
 
@@ -144,6 +166,15 @@ def _get_latest_pending_alert():
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT * FROM ops_alerts WHERE status = 'pending' ORDER BY id DESC LIMIT 1")
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def _get_latest_alert_context():
+    """Get the latest alert (any status) to use as context for chat."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM ops_alerts ORDER BY id DESC LIMIT 1")
     row = cur.fetchone()
     conn.close()
     return row

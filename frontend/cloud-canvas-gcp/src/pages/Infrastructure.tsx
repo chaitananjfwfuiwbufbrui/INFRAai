@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { 
-  Code2, 
-  Layout, 
-  Server, 
-  Network, 
-  Shield, 
-  Database, 
+import {
+  Code2,
+  Layout,
+  Server,
+  Network,
+  Shield,
+  Database,
   Scale,
   Github,
   Plus,
@@ -183,78 +183,29 @@ export default function Infrastructure() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  
+
   // Get runId from URL params (persists on refresh)
   const urlRunId = searchParams.get('runId');
   // Also check location state for initial navigation from canvas
   const stateRunId = (location.state as { runId?: string } | null)?.runId;
-  
+
   const [isCodeView, setIsCodeView] = useState(false);
   const [selectedFile, setSelectedFile] = useState('main.tf');
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
-  const [jsonConfig, setJsonConfig] = useState('');
-  const [projectId, setProjectId] = useState('');
+  const [projectId, setProjectId] = useState(() => localStorage.getItem('gcp_project_id') || '');
+  const [jsonConfig, setJsonConfig] = useState(() => localStorage.getItem('gcp_sa_key') || '');
   const [isLoading, setIsLoading] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [loadedFiles, setLoadedFiles] = useState<Record<string, string>>(terraformFiles);
-  const [runId, setRunId] = useState<string | null>(urlRunId);
-  const [hasFetched, setHasFetched] = useState(false);
 
-  // If we got runId from state (navigation), update URL params
-  useEffect(() => {
-    if (stateRunId && !urlRunId) {
-      setSearchParams({ runId: stateRunId });
-      setRunId(stateRunId);
-      // Clear location state
-      window.history.replaceState({}, document.title);
-    }
-  }, [stateRunId, urlRunId, setSearchParams]);
+  // Get runId from URL params or location state
+  const runId = urlRunId || stateRunId;
 
-  // Fetch run details if runId is available
-  useEffect(() => {
-    const fetchRunDetails = async () => {
-      const currentRunId = urlRunId || stateRunId;
-      if (currentRunId && !hasFetched) {
-        setIsLoading(true);
-        setRunId(currentRunId);
-        
-        try {
-          const response = await apiRequest<{ run_id: string; files: Record<string, string> }>(
-            apiEndpoints.getRunDetails(currentRunId),
-            {
-              method: 'GET',
-              headers: {
-                'accept': 'application/json',
-              },
-            }
-          );
-          
-          setLoadedFiles(response.files);
-          // Set first file as selected
-          const fileNames = Object.keys(response.files);
-          if (fileNames.length > 0) {
-            setSelectedFile(fileNames[0]);
-          }
-          
-          setHasFetched(true);
-          toast.success('Terraform files loaded successfully!');
-        } catch (error) {
-          console.error('Failed to fetch run details:', error);
-          toast.error('Failed to load Terraform files', {
-            description: 'Using default templates instead'
-          });
-          setHasFetched(true);
-        } finally {
-          setIsLoading(false);
-        }
-      }
-    };
+  // Use actual terraform files or loaded files
+  const loadedFiles = terraformFiles;
 
-    fetchRunDetails();
-  }, [urlRunId, stateRunId, hasFetched]);
-
-  const totalCost = infrastructureSummary.costs.reduce((sum, item) => sum + item.amount, 0);
+  // Calculate total cost
+  const totalCost = infrastructureSummary.costs.reduce((sum, cost) => sum + cost.amount, 0);
 
   const handleCreate = async () => {
     if (!runId) {
@@ -266,6 +217,10 @@ export default function Infrastructure() {
       toast.error('Please enter a Project ID');
       return;
     }
+
+    // Persist credentials
+    localStorage.setItem('gcp_project_id', projectId);
+    localStorage.setItem('gcp_sa_key', jsonConfig);
 
     setIsCreating(true);
 
@@ -290,8 +245,8 @@ export default function Infrastructure() {
 
       toast.success('Infrastructure deployment started!');
       // Navigate to deployment page with runId as URL param
-      navigate(`/deployment?runId=${runId}&projectId=${encodeURIComponent(projectId.trim())}`, { 
-        state: { platform: selectedPlatform, saKeyJson: jsonConfig } 
+      navigate(`/deployment?runId=${runId}&projectId=${encodeURIComponent(projectId.trim())}`, {
+        state: { platform: selectedPlatform, saKeyJson: jsonConfig }
       });
       setIsCreateDialogOpen(false);
       setSelectedPlatform(null);
@@ -378,8 +333,8 @@ export default function Infrastructure() {
               />
             </div>
 
-            <Button 
-              onClick={handleCreate} 
+            <Button
+              onClick={handleCreate}
               className="w-full"
               disabled={!selectedPlatform || !projectId.trim() || isCreating}
             >
@@ -400,9 +355,9 @@ export default function Infrastructure() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <NavHeader 
-        showBackButton 
-        backPath="/canvas" 
+      <NavHeader
+        showBackButton
+        backPath="/canvas"
         rightContent={headerRightContent}
       />
 
@@ -603,7 +558,7 @@ export default function Infrastructure() {
                     <div className="border-t border-border pt-3 mt-3">
                       <div className="flex justify-between items-center text-lg font-bold">
                         <span>Total:</span>
-                        <span className="text-primary">₹{totalCost.toLocaleString()} / month</span>
+                        <span className="text-primary">₹{totalCost.toLocaleString()}</span>
                       </div>
                     </div>
                   </div>

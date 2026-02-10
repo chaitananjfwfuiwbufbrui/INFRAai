@@ -109,10 +109,15 @@ class TerraformExecutor:
             dict: {"success": bool, "stderr": str}
         """
         try:
+            creds_dir = self._prepare_creds()
+            
             result = subprocess.run(
                 [
                     "docker", "run", "--rm",
+                    "-e", f"TF_VAR_project_id={self.project_id}",
+                    "-e", "GOOGLE_APPLICATION_CREDENTIALS=/creds/gcp.json",
                     "-v", f"{self.run_path}:/workspace",
+                    "-v", f"{creds_dir}:/creds:ro",
                     "-w", "/workspace",
                     "terraform-runner",
                     "terraform", "validate"
