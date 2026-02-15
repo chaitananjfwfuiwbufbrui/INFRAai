@@ -1,11 +1,9 @@
-import { useState, useCallback, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useState, useCallback } from 'react';
 import { Node } from '@xyflow/react';
 import TopToolbar from '@/components/toolbar/TopToolbar';
 import LeftPanel from '@/components/panels/LeftPanel';
 import RightPanel from '@/components/panels/RightPanel';
 import ArchitectureCanvas from '@/components/canvas/ArchitectureCanvas';
-import AIChatPopup from '@/components/chat/AIChatPopup';
 import { GCPNodeData, useArchitectureStore } from '@/store/architectureStore';
 
 interface LocationState {
@@ -15,40 +13,13 @@ interface LocationState {
 }
 
 const Index = () => {
-  const location = useLocation();
-  const state = location.state as LocationState | null;
-  
+
   const [selectedNode, setSelectedNode] = useState<Node<GCPNodeData> | null>(null);
   const [showConfig, setShowConfig] = useState(false);
-  const [showAIChat, setShowAIChat] = useState(false);
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
   const [initialChatMessage, setInitialChatMessage] = useState<{ prompt: string; summary: string } | null>(null);
   const { selectNode, nodes } = useArchitectureStore();
 
-  // Handle navigation state - open chat if coming from landing with prompt
-  useEffect(() => {
-    if (state?.openChat) {
-      setShowAIChat(true);
-      if (state.prompt && state.summary) {
-        setInitialChatMessage({ prompt: state.prompt, summary: state.summary });
-      }
-      // Clear the state to prevent re-triggering
-      window.history.replaceState({}, document.title);
-    }
-  }, [state]);
-
-  // Handle Ctrl+L for AI chat
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === 'l') {
-        e.preventDefault();
-        setShowAIChat(prev => !prev);
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   const handleDragStart = useCallback((
     event: React.DragEvent,
@@ -87,14 +58,14 @@ const Index = () => {
   return (
     <div className="h-screen w-full flex flex-col overflow-hidden bg-background">
       <TopToolbar />
-      
+
       <div className="flex-1 flex overflow-hidden">
-        <LeftPanel 
-          onDragStart={handleDragStart} 
+        <LeftPanel
+          onDragStart={handleDragStart}
           isCollapsed={leftPanelCollapsed}
           onToggleCollapse={() => setLeftPanelCollapsed(prev => !prev)}
         />
-        
+
         <main className="flex-1 relative">
           {/* Expand button when panel is collapsed */}
           {leftPanelCollapsed && (
@@ -108,11 +79,11 @@ const Index = () => {
               </svg>
             </button>
           )}
-          <ArchitectureCanvas 
-            onNodeClick={handleNodeClick} 
+          <ArchitectureCanvas
+            onNodeClick={handleNodeClick}
             onNodeDoubleClick={handleNodeDoubleClick}
           />
-          
+
           {/* Empty state */}
           {nodes.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -155,18 +126,11 @@ const Index = () => {
             </div>
           )}
         </main>
-        
+
         {showConfig && (
           <RightPanel selectedNode={selectedNode} onClose={handleClosePanel} />
         )}
       </div>
-
-      {/* AI Chat Popup */}
-      <AIChatPopup 
-        isOpen={showAIChat} 
-        onClose={handleChatClose}
-        initialMessage={initialChatMessage}
-      />
     </div>
   );
 };

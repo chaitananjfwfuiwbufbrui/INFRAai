@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Send, Mic, MicOff, Volume2, Loader2 } from 'lucide-react';
+import { X, Send, Mic, MicOff, Volume2, Loader2, Maximize2, Minimize2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { useArchitectureStore } from '@/store/architectureStore';
-import { useAuth } from "@clerk/clerk-react";
+import { apiEndpoints } from '@/lib/api';
 
 interface Message {
   id: string;
@@ -16,9 +16,12 @@ interface AIChatPopupProps {
   isOpen: boolean;
   onClose: () => void;
   initialMessage?: { prompt: string; summary: string } | null;
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
+  onNewMessage?: () => void;
 }
 
-const AIChatPopup = ({ isOpen, onClose, initialMessage }: AIChatPopupProps) => {
+const AIChatPopup = ({ isOpen, onClose, initialMessage, isMaximized = false, onToggleMaximize, onNewMessage }: AIChatPopupProps) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -34,7 +37,7 @@ const AIChatPopup = ({ isOpen, onClose, initialMessage }: AIChatPopupProps) => {
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { loadArchitecture } = useArchitectureStore();
-  const { getToken } = useAuth();
+
   // Handle initial message from landing page
   useEffect(() => {
     if (initialMessage && !hasProcessedInitial) {
@@ -75,40 +78,29 @@ const AIChatPopup = ({ isOpen, onClose, initialMessage }: AIChatPopupProps) => {
     try {
       const formData = new FormData();
       formData.append('prompt', prompt);
-      const token = await getToken();
-      if (!token) {
-        throw new Error("User not authenticated");
-      }
-      const response = await fetch("http://localhost:8000/generate-graph", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+
+      const response = await fetch(apiEndpoints.generateGraph, {
+        method: 'POST',
         body: formData,
       });
+
       if (!response.ok) {
         throw new Error('Failed to generate architecture');
       }
 
       const data = await response.json();
 
-      // Load the graph into the canvas
       if (data.graph?.nodes && data.graph?.edges) {
         loadArchitecture(data.graph.nodes, data.graph.edges);
       }
 
-      // Save monitoring policies if available
-      if (data.plan?.monitoring) {
-        useArchitectureStore.getState().setMonitoring(data.plan.monitoring);
-      }
-
-      // Add AI response with summary
       const aiResponse: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.summary || 'Architecture generated successfully!'
       };
       setMessages(prev => [...prev, aiResponse]);
+      onNewMessage?.();
       speakText(aiResponse.content);
     } catch (error) {
       const errorMessage: Message = {
@@ -117,6 +109,7 @@ const AIChatPopup = ({ isOpen, onClose, initialMessage }: AIChatPopupProps) => {
         content: 'Sorry, I encountered an error generating the architecture. Please try again.'
       };
       setMessages(prev => [...prev, errorMessage]);
+      onNewMessage?.();
     } finally {
       setIsLoading(false);
       setIsTyping(false);
@@ -168,22 +161,42 @@ const AIChatPopup = ({ isOpen, onClose, initialMessage }: AIChatPopupProps) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 w-96 h-[500px] bg-card border border-border rounded-xl shadow-2xl flex flex-col z-50 animate-slide-in">
+    <div
+      className={cn(
+        'fixed z-[9999] flex flex-col bg-card border border-border shadow-2xl transition-all duration-300',
+        isMaximized
+          ? 'top-0 right-0 w-[420px] h-screen rounded-none border-r-0 border-t-0 border-b-0'
+          : 'bottom-4 right-4 w-96 h-[500px] rounded-xl animate-slide-in'
+      )}
+    >
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
+      <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
           <span className="text-foreground font-medium">AI Assistant</span>
           {isSpeaking && <Volume2 className="w-4 h-4 text-primary animate-pulse" />}
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground hover:bg-secondary w-8 h-8"
-        >
-          <X className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          {onToggleMaximize && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleMaximize}
+              className="text-muted-foreground hover:text-foreground hover:bg-secondary w-8 h-8"
+              title={isMaximized ? 'Minimize' : 'Maximize'}
+            >
+              {isMaximized ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground hover:bg-secondary w-8 h-8"
+          >
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       {/* Messages */}
@@ -214,7 +227,7 @@ const AIChatPopup = ({ isOpen, onClose, initialMessage }: AIChatPopupProps) => {
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-border shrink-0">
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"

@@ -5,11 +5,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/hooks/useTheme";
 import Landing from "./pages/Landing";
+import LandingPage from "./pages/LandingPage";
 import Index from "./pages/Index";
 import Deployment from "./pages/Deployment";
 import Infrastructure from "./pages/Infrastructure";
-import OpsDashboard from "./pages/OpsDashboard";
+import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
+import AppLayoutWithChat from "./layouts/AppLayoutWithChat";
+import AppLayoutNoChat from "./layouts/AppLayoutNoChat";
 
 const queryClient = new QueryClient();
 
@@ -21,11 +24,20 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <Routes>
-            <Route path="/" element={<Landing />} />
-            <Route path="/canvas" element={<Index />} />
-            <Route path="/deployment" element={<Deployment />} />
-            <Route path="/infrastructure" element={<Infrastructure />} />
-            <Route path="/ops" element={<OpsDashboard />} />
+            {/* Routes WITHOUT chat overlay */}
+            <Route element={<AppLayoutNoChat />}>
+              <Route path="/" element={<Landing />} />
+              <Route path="/landingpage" element={<LandingPage />} />
+            </Route>
+
+            {/* Routes WITH chat overlay */}
+            <Route element={<AppLayoutWithChat />}>
+              <Route path="/canvas" element={<Index />} />
+              <Route path="/deployment" element={<Deployment />} />
+              <Route path="/infrastructure" element={<Infrastructure />} />
+              <Route path="/settings" element={<Settings />} />
+            </Route>
+
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

@@ -2,34 +2,15 @@ import { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
 import { GCPNodeData } from '@/store/architectureStore';
 import { getCategoryColor, getCategoryBorderColor } from '@/hooks/useCloudNodes';
-import { CheckCircle2, AlertCircle, Server, Cloud, Globe, Network, HardDrive, Database, MessageSquare, Shield, Container, Layers, Radio, Lock, Key, FileText, Workflow, BarChart3, LucideIcon } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Server } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-// Map icon string names to Lucide components
-const iconMap: Record<string, LucideIcon> = {
-  Server,
-  Cloud,
-  Globe,
-  Network,
-  HardDrive,
-  Database,
-  MessageSquare,
-  Shield,
-  Container,
-  Layers,
-  Radio,
-  Lock,
-  Key,
-  FileText,
-  Workflow,
-  BarChart3,
-};
+import { gcpIcons } from '@/components/icons/CloudIcons';
 
 type GCPNodeProps = NodeProps & { data: GCPNodeData };
 
 const GCPNode = memo(({ data, selected }: GCPNodeProps) => {
-  // data.icon now contains the icon name string from API
-  const IconComponent = iconMap[data.icon] || Server;
+  // Get the official GCP icon, fallback to Server if not found
+  const CloudIcon = gcpIcons[data.icon] || null;
 
   return (
     <div
@@ -57,10 +38,14 @@ const GCPNode = memo(({ data, selected }: GCPNodeProps) => {
       
       <div className="flex items-start gap-3">
         <div className={cn(
-          'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
-          getCategoryColor(data.category)
+          'w-10 h-10 rounded-lg flex items-center justify-center shrink-0 overflow-hidden',
+          !CloudIcon && getCategoryColor(data.category)
         )}>
-          <IconComponent className="w-5 h-5 text-white" />
+          {CloudIcon ? (
+            <CloudIcon className="w-8 h-8" />
+          ) : (
+            <Server className="w-5 h-5 text-white" />
+          )}
         </div>
         
         <div className="flex-1 min-w-0">

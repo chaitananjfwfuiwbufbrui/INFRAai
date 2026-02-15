@@ -13,7 +13,8 @@ import {
   Upload,
   LayoutGrid,
   Sparkles,
-  Loader2
+  Loader2,
+  Settings
 } from 'lucide-react';
 import { useArchitectureStore } from '@/store/architectureStore';
 import { useTheme } from '@/hooks/useTheme';
@@ -26,10 +27,6 @@ import {
   SignInButton,
   UserButton,
 } from '@clerk/clerk-react';
-import {
-  Dialog,
-  DialogContent,
-} from '@/components/ui/dialog';
 
 const TopToolbar = () => {
   const navigate = useNavigate();
@@ -39,24 +36,19 @@ const TopToolbar = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Convert canvas nodes to infrastructure spec
   const convertNodesToInfraSpec = () => {
     const resources = nodes.map((node) => {
       const baseResource: Record<string, unknown> = {
         type: node.data.icon || node.data.category,
         name: node.data.label.toLowerCase().replace(/\s+/g, '-'),
       };
-
-      // Add config values if available
       if (node.data.config) {
         Object.entries(node.data.config).forEach(([key, value]) => {
           baseResource[key] = value;
         });
       }
-
       return baseResource;
     });
-
     return {
       provider: 'gcp',
       project_name: 'demo-app',
@@ -67,42 +59,25 @@ const TopToolbar = () => {
 
   const handleGenerate = async () => {
     if (nodes.length === 0) {
-      toast.info('Canvas is empty', {
-        description: 'Add some nodes to generate Terraform'
-      });
+      toast.info('Canvas is empty', { description: 'Add some nodes to generate Terraform' });
       return;
     }
-
     setIsGenerating(true);
-
     try {
       const infraSpec = convertNodesToInfraSpec();
-      const monitoring = useArchitectureStore.getState().monitoring;
-
       const response = await apiRequest<{ run_id: string; files: string[] }>(
         apiEndpoints.generateTerraform,
         {
           method: 'POST',
-          headers: {
-            'accept': 'application/json',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            infra_spec: infraSpec,
-            monitoring_policies: monitoring
-          }),
+          headers: { 'accept': 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ infra_spec: infraSpec }),
         }
       );
-
       toast.success('Terraform generated successfully!');
-
-      // Navigate to infrastructure page with run_id
       navigate('/infrastructure', { state: { runId: response.run_id } });
     } catch (error) {
       console.error('Generate error:', error);
-      toast.error('Failed to generate Terraform', {
-        description: 'Please check your connection and try again'
-      });
+      toast.error('Failed to generate Terraform', { description: 'Please check your connection and try again' });
     } finally {
       setIsGenerating(false);
     }
@@ -121,7 +96,7 @@ const TopToolbar = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'gcp-architecture.json';
+    a.download = 'architecture.json';
     a.click();
     URL.revokeObjectURL(url);
     toast.success('Architecture exported as JSON');
@@ -130,52 +105,34 @@ const TopToolbar = () => {
   const handleValidate = () => {
     const unconfiguredNodes = nodes.filter(n => !n.data.configured);
     if (unconfiguredNodes.length > 0) {
-      toast.warning(`${unconfiguredNodes.length} node(s) not configured`, {
-        description: 'Configure all nodes for a complete architecture'
-      });
+      toast.warning(`${unconfiguredNodes.length} node(s) not configured`, { description: 'Configure all nodes for a complete architecture' });
       setIsValidated(false);
     } else if (nodes.length === 0) {
-      toast.info('Canvas is empty', {
-        description: 'Add some nodes to start designing'
-      });
+      toast.info('Canvas is empty', { description: 'Add some nodes to start designing' });
       setIsValidated(false);
     } else {
-      toast.success('Architecture validated', {
-        description: 'All nodes are properly configured'
-      });
+      toast.success('Architecture validated', { description: 'All nodes are properly configured' });
       setIsValidated(true);
     }
   };
 
-  const handleProceed = () => {
-    navigate('/deploy');
-  };
+  const handleProceed = () => { navigate('/deploy'); };
 
   const handleClear = () => {
-    if (nodes.length === 0) {
-      toast.info('Canvas is already empty');
-      return;
-    }
-    if (confirm('Are you sure you want to clear the canvas?')) {
-      clearCanvas();
-      toast.success('Canvas cleared');
-    }
+    if (nodes.length === 0) { toast.info('Canvas is already empty'); return; }
+    if (confirm('Are you sure you want to clear the canvas?')) { clearCanvas(); toast.success('Canvas cleared'); }
   };
 
-  const handleImport = () => {
-    fileInputRef.current?.click();
-  };
+  const handleImport = () => { fileInputRef.current?.click(); };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const content = event.target?.result as string;
         const data = JSON.parse(content);
-
         if (data.nodes && Array.isArray(data.nodes) && data.edges && Array.isArray(data.edges)) {
           loadArchitecture(data.nodes, data.edges);
           if (data.monitoring) {
@@ -184,31 +141,27 @@ const TopToolbar = () => {
           toast.success('Architecture imported successfully');
           setIsValidated(false);
         } else {
-          toast.error('Invalid architecture file', {
-            description: 'File must contain nodes and edges arrays'
-          });
+          toast.error('Invalid architecture file', { description: 'File must contain nodes and edges arrays' });
         }
       } catch (error) {
-        toast.error('Failed to parse JSON file', {
-          description: 'Please ensure the file is valid JSON'
-        });
+        toast.error('Failed to parse JSON file', { description: 'Please ensure the file is valid JSON' });
       }
     };
     reader.readAsText(file);
-
-    // Reset input so same file can be imported again
     e.target.value = '';
   };
 
   return (
-    <header className="h-14 bg-sidebar border-b border-sidebar-border flex items-center justify-between px-4">
+    <header className="h-14 bg-background border-b border-border/50 flex items-center justify-between px-4 backdrop-blur-md">
       <Link to="/" className="flex items-center gap-2">
-        <LayoutGrid className="w-6 h-6 text-primary" />
-        <span className="text-foreground font-bold text-xl italic">cloud</span>
-        <span className="text-muted-foreground text-sm">.architect</span>
+        <div className="w-7 h-7 rounded-md bg-foreground flex items-center justify-center">
+          <LayoutGrid className="w-3.5 h-3.5 text-background" />
+        </div>
+        <span className="font-serif text-lg font-semibold text-foreground">Kairos</span>
+        <span className="font-serif text-lg font-semibold text-primary">.AI</span>
       </Link>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <button className="toolbar-button" title="Undo">
           <Undo2 className="w-4 h-4" />
         </button>
@@ -216,7 +169,7 @@ const TopToolbar = () => {
           <Redo2 className="w-4 h-4" />
         </button>
 
-        <div className="w-px h-6 bg-border mx-2" />
+        <div className="w-px h-6 bg-border/50 mx-1.5" />
 
         <button className="toolbar-button" onClick={handleSave}>
           <Save className="w-4 h-4" />
@@ -227,13 +180,7 @@ const TopToolbar = () => {
           <Upload className="w-4 h-4" />
           <span className="hidden sm:inline">Import</span>
         </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json"
-          onChange={handleFileChange}
-          className="hidden"
-        />
+        <input ref={fileInputRef} type="file" accept=".json" onChange={handleFileChange} className="hidden" />
 
         <button className="toolbar-button" onClick={handleExport}>
           <FileJson className="w-4 h-4" />
@@ -246,73 +193,47 @@ const TopToolbar = () => {
         </button>
 
         {isValidated && (
-          <Button
-            onClick={handleProceed}
-            className="bg-accent hover:bg-accent/90 text-accent-foreground gap-2"
-          >
-            Proceed
-            <ArrowRight className="w-4 h-4" />
+          <Button onClick={handleProceed} className="rounded-full bg-accent hover:bg-accent/90 text-accent-foreground gap-2">
+            Proceed <ArrowRight className="w-4 h-4" />
           </Button>
         )}
 
-        {/* Generate Button - only show when canvas has nodes */}
         {nodes.length > 0 && (
-          <Button
-            onClick={handleGenerate}
-            disabled={isGenerating}
-            className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
-          >
+          <Button onClick={handleGenerate} disabled={isGenerating} className="rounded-full bg-foreground hover:bg-foreground/90 text-background gap-2">
             {isGenerating ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="hidden sm:inline">Generating...</span>
-              </>
+              <><Loader2 className="w-4 h-4 animate-spin" /><span className="hidden sm:inline">Generating...</span></>
             ) : (
-              <>
-                <Sparkles className="w-4 h-4" />
-                <span className="hidden sm:inline">Generate</span>
-              </>
+              <><Sparkles className="w-4 h-4" /><span className="hidden sm:inline">Generate</span></>
             )}
           </Button>
         )}
 
-        <div className="w-px h-6 bg-border mx-2" />
+        <div className="w-px h-6 bg-border/50 mx-1.5" />
 
-        <button
-          className="toolbar-button text-destructive hover:bg-destructive/10"
-          onClick={handleClear}
-          title="Clear Canvas"
-        >
+        <button className="toolbar-button text-destructive hover:bg-destructive/10" onClick={handleClear} title="Clear Canvas">
           <Trash2 className="w-4 h-4" />
         </button>
 
-        {/* Theme Toggle */}
         <Button
           variant="ghost"
           size="icon"
-          onClick={toggleTheme}
-          className="text-muted-foreground hover:text-foreground"
+          onClick={() => navigate('/settings')}
+          className="rounded-full text-muted-foreground hover:text-foreground"
         >
-          {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+          <Settings className="w-4.5 h-4.5" />
         </Button>
 
-        {/* User Profile */}
+        <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full text-muted-foreground hover:text-foreground">
+          {theme === 'light' ? <Moon className="w-4.5 h-4.5" /> : <Sun className="w-4.5 h-4.5" />}
+        </Button>
+
         <SignedOut>
           <SignInButton mode="modal">
-            <Button variant="outline" size="sm">
-              Sign In
-            </Button>
+            <Button variant="outline" size="sm" className="rounded-full px-5">Sign In</Button>
           </SignInButton>
         </SignedOut>
         <SignedIn>
-          <UserButton
-            afterSignOutUrl="/"
-            appearance={{
-              elements: {
-                avatarBox: "w-9 h-9"
-              }
-            }}
-          />
+          <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: "w-8 h-8" } }} />
         </SignedIn>
       </div>
     </header>

@@ -4,6 +4,18 @@
 
 **URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
 
+## Environment Variables
+
+This project requires environment variables to function correctly. 
+A list of required variables is available in `example.env`. 
+
+To set up your environment:
+1. Copy `example.env` to a new file named `.env`.
+2. Fill in the values for each variable.
+
+Required variables:
+- `VITE_CLERK_PUBLISHABLE_KEY`: Your Clerk Publishable Key (required for authentication).
+
 ## How can I edit this code?
 
 There are several ways of editing your application.
